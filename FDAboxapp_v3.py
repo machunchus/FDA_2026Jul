@@ -33,11 +33,11 @@ if "alto_px" not in st.session_state: st.session_state.alto_px = 960
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📐 Filtros S-G: Detección Espacial")
-prop_sg_y = st.sidebar.slider("Ventana S-G en Y (%):", 0.1, 10.0, 1.5, step=0.1)
+prop_sg_y = st.sidebar.slider("Ventana S-G en Y (%):", 0.5, 15.0, 1.5, step=0.1)
 w_sg_y = max(5, int((prop_sg_y / 100.0) * st.session_state.alto_px))
 if w_sg_y % 2 == 0: w_sg_y += 1
 
-prop_sg_x = st.sidebar.slider("Ventana S-G en X (%):", 0.5, 10.0, 0.5, step=0.1)
+prop_sg_x = st.sidebar.slider("Ventana S-G en X (%):", 0.1, 10.0, 0.5, step=0.1)
 w_sg_x = max(5, int((prop_sg_x / 100.0) * st.session_state.ancho_px))
 if w_sg_x % 2 == 0: w_sg_x += 1
 
