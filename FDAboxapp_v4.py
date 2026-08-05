@@ -156,70 +156,100 @@ with tab4:
     if "archivos_subidos" not in st.session_state or not st.session_state.archivos_subidos:
         st.warning("⚠️ Primero cargá las fotos en el Módulo 3.")
     else:
-        st.markdown("Procesamiento automático de perfiles espaciales mediante calibración Savitzky-Golay interna.")
+        st.markdown("### 🛠️ Ajuste y Visualización de Segmentación")
+        
+        # Parámetro ajustable por el usuario para forzar la detección si la imagen es rebelde
+        prominencia = st.slider("Sensibilidad de detección (Bajar si detecta 0 posillos, subir si detecta de más):", min_value=1, max_value=50, value=10, step=1)
         
         bytes_primera = st.session_state.archivos_subidos[0].getvalue()
         img_np_0 = cv2.imdecode(np.frombuffer(bytes_primera, np.uint8), cv2.IMREAD_COLOR)
         
         if img_np_0 is not None:
+            # Convertir a RGB para que Streamlit la muestre con los colores correctos
+            img_rgb = cv2.cvtColor(img_np_0, cv2.COLOR_BGR2RGB)
             gray_0 = cv2.cvtColor(img_np_0, cv2.COLOR_BGR2GRAY)
             perfil_x = np.mean(gray_0, axis=0)
             
             p_sg_x = savgol_filter(perfil_x, window_length=51, polyorder=3)
-            picos_x, _ = find_peaks(p_sg_x, distance=img_np_0.shape[1]//6, prominence=10)
+            # Acá usamos la prominencia del slider
+            picos_x, _ = find_peaks(p_sg_x, distance=img_np_0.shape[1]//8, prominence=prominencia)
             
-            st.info(f"🎯 ROIs/Posillos detectados automáticamente: **{len(picos_x)} posillos**")
-            
-            st.subheader("Configuración de Muestras y Masa por Posillo (g)")
-            cols_roi = st.columns(min(len(picos_x), 4)) if len(picos_x) > 0 else [st]
-            
-            datos_rois = {}
-            for i, px in enumerate(picos_x):
-                col_idx = i % len(cols_roi)
-                with cols_roi[col_idx]:
-                    st.markdown(f"**Posillo {i+1}** (x={px})")
-                    nombre_roi = st.text_input(f"Nombre Muestra {i+1}", value=f"Muestra_{i+1}", key=f"n_roi_{i}")
-                    masa_roi = st.number_input(f"Masa (g) Muestra {i+1}", min_value=0.01, value=1.00, step=0.05, key=f"m_roi_{i}")
-                    datos_rois[f"ROI_{i+1}"] = {"x": px, "nombre": nombre_roi, "masa": masa_roi}
-            
-            st.session_state.datos_rois = datos_rois
-            
-            if st.button("🚀 Ejecutar Extracción de Intensidades en el Tiempo"):
-                progress_bar = st.progress(0)
-                resultados = []
+            # --- SECCIÓN VISUAL ---
+            col_v1, col_v2 = st.columns(2)
+            with col_v1:
+                st.markdown("**1. Visión de la Cámara (Centro de los posillos detectados)**")
+                img_display = img_rgb.copy()
+                for px in picos_x:
+                    # Dibujar línea vertical roja donde detecta el ROI
+                    cv2.line(img_display, (px, 0), (px, img_display.shape[0]), (255, 0, 0), max(2, img_display.shape[1]//200)) 
+                st.image(img_display, use_container_width=True)
                 
-                for idx, arch in enumerate(st.session_state.archivos_subidos):
-                    file_bytes = arch.getvalue()
-                    img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
+            with col_v2:
+                st.markdown("**2. Perfil de Intensidad (Radiografía del algoritmo)**")
+                fig_p, ax_p = plt.subplots(figsize=(6, 4))
+                ax_p.plot(p_sg_x, label="Perfil Lumínico", color='blue')
+                ax_p.plot(picos_x, p_sg_x[picos_x], "x", color='red', markersize=10, label="Picos Encontrados")
+                ax_p.set_xlabel("Ancho de la imagen (píxeles)")
+                ax_p.set_ylabel("Intensidad Promedio")
+                ax_p.legend()
+                st.pyplot(fig_p)
+            # ----------------------
+
+            if len(picos_x) == 0:
+                st.error("🚨 **Cero posillos detectados.** Probá bajar la Sensibilidad en la barra deslizante de arriba. Si sigue en 0, es muy probable que la foto esté torcida o muy oscura.")
+            else:
+                st.success(f"🎯 ROIs/Posillos detectados automáticamente: **{len(picos_x)} posillos**")
+                
+                st.subheader("Configuración de Muestras y Masa por Posillo (g)")
+                cols_roi = st.columns(min(len(picos_x), 4)) if len(picos_x) > 0 else [st]
+                
+                datos_rois = {}
+                for i, px in enumerate(picos_x):
+                    col_idx = i % len(cols_roi)
+                    with cols_roi[col_idx]:
+                        st.markdown(f"**Posillo {i+1}** (x={px})")
+                        nombre_roi = st.text_input(f"Nombre Muestra {i+1}", value=f"Muestra_{i+1}", key=f"n_roi_{i}")
+                        masa_roi = st.number_input(f"Masa (g) Muestra {i+1}", min_value=0.01, value=1.00, step=0.05, key=f"m_roi_{i}")
+                        datos_rois[f"ROI_{i+1}"] = {"x": px, "nombre": nombre_roi, "masa": masa_roi}
+                
+                st.session_state.datos_rois = datos_rois
+                
+                if st.button("🚀 Ejecutar Extracción de Intensidades en el Tiempo"):
+                    progress_bar = st.progress(0)
+                    resultados = []
                     
-                    if img is not None:
-                        t_min = float(idx) # Incremento de 1 min por foto
+                    for idx, arch in enumerate(st.session_state.archivos_subidos):
+                        file_bytes = arch.getvalue()
+                        img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
                         
-                        for roi_id, info in datos_rois.items():
-                            px = info["x"]
-                            y_center = img.shape[0] // 2
-                            r_win = 15
-                            patch = img[max(0, y_center-r_win):min(img.shape[0], y_center+r_win), max(0, px-r_win):min(img.shape[1], px+r_win)]
+                        if img is not None:
+                            t_min = float(idx) # Incremento de 1 min por foto
                             
-                            b_val = np.mean(patch[:, :, 0])
-                            g_val = np.mean(patch[:, :, 1])
-                            r_val = np.mean(patch[:, :, 2])
-                            
-                            resultados.append({
-                                "Tiempo_min": t_min,
-                                "Imagen": arch.name,
-                                "ROI": roi_id,
-                                "Muestra": info["nombre"],
-                                "Masa_g": info["masa"],
-                                "R": r_val,
-                                "G": g_val,
-                                "B": b_val,
-                                "Ratio_GB": g_val / (b_val + 1e-6)
-                            })
-                    progress_bar.progress((idx + 1) / len(st.session_state.archivos_subidos))
-                
-                st.session_state.df_raw = pd.DataFrame(resultados)
-                st.success("✅ Extracción completada. Avanzá al Módulo 5.")
+                            for roi_id, info in datos_rois.items():
+                                px = info["x"]
+                                y_center = img.shape[0] // 2
+                                r_win = 15
+                                patch = img[max(0, y_center-r_win):min(img.shape[0], y_center+r_win), max(0, px-r_win):min(img.shape[1], px+r_win)]
+                                
+                                b_val = np.mean(patch[:, :, 0])
+                                g_val = np.mean(patch[:, :, 1])
+                                r_val = np.mean(patch[:, :, 2])
+                                
+                                resultados.append({
+                                    "Tiempo_min": t_min,
+                                    "Imagen": arch.name,
+                                    "ROI": roi_id,
+                                    "Muestra": info["nombre"],
+                                    "Masa_g": info["masa"],
+                                    "R": r_val,
+                                    "G": g_val,
+                                    "B": b_val,
+                                    "Ratio_GB": g_val / (b_val + 1e-6)
+                                })
+                        progress_bar.progress((idx + 1) / len(st.session_state.archivos_subidos))
+                    
+                    st.session_state.df_raw = pd.DataFrame(resultados)
+                    st.success("✅ Extracción completada. Avanzá al Módulo 5.")
 
 # -------------------------------------------------------------------------
 # MÓDULO 5: ANÁLISIS CINÉTICO, CORTE DE SEDIMENTACIÓN Y DERIVADAS
