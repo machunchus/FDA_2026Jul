@@ -19,6 +19,13 @@ st.title("🔬 Plataforma Integral de Análisis FDA (Sensor de Suelo)")
 if "exp_id" not in st.session_state:
     st.session_state.exp_id = f"EXP-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
+# Inicializar DataFrames vacíos para evitar KeyError absoluto
+if "df_raw" not in st.session_state:
+    st.session_state.df_raw = pd.DataFrame()
+
+if "df_export" not in st.session_state:
+    st.session_state.df_export = pd.DataFrame()
+
 st.caption(f"🆔 **ID de Sesión Activa:** `{st.session_state.exp_id}`")
 
 # =========================================================================
@@ -129,7 +136,7 @@ with tab3:
             apertura_val = st.text_input("Especifique apertura:") if ap_sel == "Otro" else ap_sel
         with c_cam2:
             wb_sel = st.selectbox("Balance de Blancos (WB):", ["5500K (Soleado)", "Incandescente", "Fluorescente", "Automático", "Otro"])
-            wb_val = st.text_input("Especifique WB:") if wb_sel == "Otro" else wb_sel
+            wb_val = st.text_input("Especifique WB:", value="5500K") if wb_sel == "Otro" else wb_sel
             enfoque_val = st.text_input("Modo de Enfoque:", value="Manual / Infinito")
 
     st.subheader("Subida de Imágenes desde Carpeta Local / Smartphone")
@@ -186,7 +193,7 @@ with tab4:
                     img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
                     
                     if img is not None:
-                        t_min = idx * 1.0
+                        t_min = float(idx) # Incremento de 1 min por foto
                         
                         for roi_id, info in datos_rois.items():
                             px = info["x"]
@@ -211,9 +218,8 @@ with tab4:
                             })
                     progress_bar.progress((idx + 1) / len(st.session_state.archivos_subidos))
                 
-                df_raw = pd.DataFrame(resultados)
-                st.session_state.df_raw = df_raw
-                st.success("✅ Extracción de intensidades completada con éxito. Pasá al Módulo 5.")
+                st.session_state.df_raw = pd.DataFrame(resultados)
+                st.success("✅ Extracción completada. Avanzá al Módulo 5.")
 
 # -------------------------------------------------------------------------
 # MÓDULO 5: ANÁLISIS CINÉTICO, CORTE DE SEDIMENTACIÓN Y DERIVADAS
@@ -221,11 +227,12 @@ with tab4:
 with tab5:
     st.header("📈 Módulo 5: Análisis Cinético y Tasas de Reacción")
     
-    if "df_raw" not in st.session_state or st.session_state.df_raw is None:
-        st.warning("⚠️ Primero ejecutá la extracción de intensidades en el Módulo 4.")
+    # Recuperamos el dataframe de forma segura
+    df_raw = st.session_state.df_raw
+    
+    if df_raw.empty or "Tiempo_min" not in df_raw.columns:
+        st.warning("⚠️ Todavía no hay datos extraídos. Volvé al Módulo 4 y hacé clic en '🚀 Ejecutar Extracción'.")
     else:
-        df_raw = st.session_state.df_raw.copy()
-        
         st.subheader("⚙️ Configuración del Filtro Cinético")
         col_c1, col_c2 = st.columns(2)
         with col_c1:
@@ -290,7 +297,7 @@ with tab5:
         
         if df_export_list:
             st.session_state.df_export = pd.concat(df_export_list)
-            st.success("✅ Análisis cinético y derivadas calculadas. Avanzá al Módulo 6 para exportar.")
+            st.success("✅ Análisis cinético completado. Avanzá al Módulo 6 para exportar los resultados.")
 
 # -------------------------------------------------------------------------
 # MÓDULO 6: EXPORTACIÓN DE DATOS Y REPORTE
@@ -298,8 +305,8 @@ with tab5:
 with tab6:
     st.header("📄 Módulo 6: Descarga de Resultados")
     
-    if "df_export" not in st.session_state or st.session_state.df_export is None:
-        st.warning("⚠️ No hay datos calculados. Ejecutá el Módulo 5.")
+    if st.session_state.df_export.empty:
+        st.warning("⚠️ No hay datos calculados todavía. Ejecutá el Módulo 5.")
     else:
         st.subheader("📥 Exportación de Tabla Completa (CSV)")
         csv_bytes = st.session_state.df_export.to_csv(index=False).encode('utf-8')
