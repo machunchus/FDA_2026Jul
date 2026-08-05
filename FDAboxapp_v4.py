@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import time
 import gc
-from datetime import datetime
+from datetime import datetime, date
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -16,15 +16,11 @@ from scipy.signal import savgol_filter, find_peaks
 st.set_page_config(page_title="Sistema FDA v4 - Modular", layout="wide")
 st.title("🔬 Plataforma Integral de Análisis FDA (Sensor de Suelo)")
 
-# Inicializar estructura de estado persistente
+# Inicializar estado persistente
 if "exp_id" not in st.session_state:
     st.session_state.exp_id = f"EXP-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-if "procesado" not in st.session_state:
-    st.session_state.procesado = False
-if "df_export" not in st.session_state:
-    st.session_state.df_export = None
 
-# Mensaje de cabecera con ID automático
+# Mensaje de cabecera
 st.caption(f"🆔 **ID de Sesión Activa:** `{st.session_state.exp_id}`")
 
 # =========================================================================
@@ -44,55 +40,92 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # -------------------------------------------------------------------------
 with tab1:
     st.header("📋 Módulo 1: Registro del Experimento")
-    st.markdown("Ingrese los metadatos generales para la trazabilidad del análisis.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        operador = st.text_input("Nombre del Operador / Investigador:", value="Operador_1")
-        nombre_exp = st.text_input("Nombre del Experimento:", value="Ensayo_FDA_Suelo")
-        objetivo = st.text_area("Objetivo del Ensayo:", value="Medición de actividad enzimática de hidrólisis de FDA.")
+    # Selector de Modo de Trabajo
+    modo_trabajo = st.radio("Acción a realizar:", ["➕ Crear Nuevo Ensayo", "🔍 Consultar Ensayo Existente (Histórico)"], horizontal=True)
     
-    with col2:
-        st.markdown("**Secuencia Metodológica de Reacción:**")
-        preincubacion = st.checkbox("¿Se realizó pre-incubación del suelo solo con Buffer?")
-        tiempo_preinc = 0
-        if preincubacion:
-            tiempo_preinc = st.number_input("Tiempo de pre-incubación (minutos):", min_value=1, value=15)
+    if modo_trabajo == "🔍 Consultar Ensayo Existente (Histórico)":
+        st.info("ℹ️ Función de búsqueda habilitada: Los ensayos guardados en Google Sheets aparecerán acá.")
+        st.selectbox("Seleccione un Ensayo Previor:", ["EXP-20260805-185212 (Ensayo_Demo)"])
+    else:
+        st.markdown("Ingrese los metadatos generales para la trazabilidad del análisis.")
         
-        mezcla_directa = st.checkbox("Mezcla directa (Suelo + Buffer + Reactivo FDA desde t=0)", value=not preincubacion)
-        
-    st.session_state.meta_m1 = {
-        "exp_id": st.session_state.exp_id,
-        "operador": operador,
-        "nombre_exp": nombre_exp,
-        "objetivo": objetivo,
-        "preincubacion": preincubacion,
-        "tiempo_preinc": tiempo_preinc
-    }
-    st.success("✅ Metadatos iniciales guardados en memoria.")
+        col1, col2 = st.columns(2)
+        with col1:
+            fecha_exp = st.date_input("Fecha del Experimento:", value=date.today())
+            operador = st.text_input("Persona a Cargo / Operador:", value="Operador_1")
+            nombre_exp = st.text_input("Nombre del Experimento:", value="Ensayo_FDA_Suelo")
+            objetivo = st.text_area("Objetivo del Ensayo:", value="Medición de actividad enzimática de hidrólisis de FDA.")
+            
+            st.subheader("🌡️ Condiciones Ambientales")
+            humedad_tierra = st.number_input("Humedad de la tierra (%):", min_value=0.0, max_value=100.0, value=15.0, step=0.5)
+            temp_ambiente = st.number_input("Temperatura Ambiente (°C):", value=22.0, step=0.5)
+            temp_reaccion = st.number_input("Temperatura en el lugar de Reacción (°C):", value=25.0, step=0.5)
+
+        with col2:
+            st.subheader("⚙️ Secuencia Metodológica de Reacción")
+            inicio_reaccion = st.selectbox("La reacción se larga adicionando:", ["Tierra", "FDA"])
+            
+            preincubacion = st.checkbox("Pre-incubación (Buffer con tierra sin FDA)")
+            
+            # Lógica dinámica para pre-incubación
+            if inicio_reaccion == "Tierra":
+                tiempo_preinc = 0
+                st.info("ℹ️ Al largar la reacción adicionando Tierra, el tiempo de pre-incubación se fija en 0 min.")
+            else:
+                if preincubacion:
+                    tiempo_preinc = st.number_input("Tiempo de pre-incubación (minutos):", min_value=1, value=15)
+                else:
+                    tiempo_preinc = 0
+            
+            comentarios_m1 = st.text_area("Comentarios del Módulo 1:", value="")
+
+        st.session_state.meta_m1 = {
+            "exp_id": st.session_state.exp_id,
+            "fecha": fecha_exp.strftime('%Y-%m-%d'),
+            "operador": operador,
+            "nombre_exp": nombre_exp,
+            "objetivo": objetivo,
+            "humedad_tierra": humedad_tierra,
+            "temp_ambiente": temp_ambiente,
+            "temp_reaccion": temp_reaccion,
+            "inicio_reaccion": inicio_reaccion,
+            "preincubacion": preincubacion,
+            "tiempo_preinc": tiempo_preinc,
+            "comentarios": comentarios_m1
+        }
+        st.success("✅ Metadatos iniciales guardados.")
 
 # -------------------------------------------------------------------------
 # MÓDULO 2: PREPROCESAMIENTO DE MUESTRAS DE SUELO
 # -------------------------------------------------------------------------
 with tab2:
     st.header("🌱 Módulo 2: Preprocesamiento de Suelo")
-    st.markdown("Condiciones de acondicionamiento de la matriz.")
     
     col_s1, col_s2 = st.columns(2)
     with col_s1:
         tamizado = st.checkbox("¿Suelo Tamizado?", value=True)
         malla_tamiz = st.text_input("Apertura de Malla (ej: < 2mm):", value="< 2 mm") if tamizado else "N/A"
-        secado = st.selectbox("Estado de Humedad / Secado:", ["Secado al Aire", "Fresco / Humedad de Campo", "Secado en Estufa (30-40°C)"])
-    
+        
+        # Desplegable con opción "Otro"
+        opciones_secado = ["Secado al Aire", "Fresco / Humedad de Campo", "Secado en Estufa (30-40°C)", "Otro"]
+        secado_sel = st.selectbox("Estado de Humedad / Secado:", opciones_secado)
+        if secado_sel == "Otro":
+            secado_detalle = st.text_input("Especifique estado de humedad/secado:")
+        else:
+            secado_detalle = secado_sel
+
     with col_s2:
         pesado_preciso = st.checkbox("Muestras pesadas en balanza analítica", value=True)
         obs_muestras = st.text_area("Observaciones sobre el suelo / muestra:", value="Suelo agrícola, textura franco-arcillosa.")
+        comentarios_m2 = st.text_area("Comentarios adicionales del Módulo 2:", value="")
         
     st.session_state.meta_m2 = {
         "tamizado": tamizado,
         "malla": malla_tamiz,
-        "secado": secado,
-        "observaciones": obs_muestras
+        "secado": secado_detalle,
+        "observaciones": obs_muestras,
+        "comentarios": comentarios_m2
     }
 
 # -------------------------------------------------------------------------
@@ -101,46 +134,60 @@ with tab2:
 with tab3:
     st.header("📸 Módulo 3: Carga de Fotos y Parámetros del Dispositivo")
     
-    with st.expander("📷 Registro de Parámetros de Cámara / Smartphone", expanded=False):
-        c_cam1, c_cam2, c_cam3 = st.columns(3)
-        modelo_dispositivo = c_cam1.text_input("Modelo de Smartphone / Cámara:", value="Samsung S22 / Camera FV-5")
-        iso_val = c_cam2.text_input("ISO / Sensibilidad:", value="100")
-        wb_val = c_cam3.text_input("Balance de Blancos (WB):", value="5500K / Soleado")
-    
-    st.subheader("Subida de Secuencia Temporal")
-    archivos_subidos = st.file_uploader("Arrastrá las imágenes (.jpg, .png) desde tu equipo o móvil", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-    
-    if archivos_subidos:
-        st.session_state.archivos_subidos = sorted(archivos_subidos, key=lambda x: x.name)
-        st.info(f"📁 {len(st.session_state.archivos_subidos)} imágenes cargadas correctamente.")
+    with st.expander("📷 Registro de Parámetros de Cámara / Smartphone", expanded=True):
+        c_cam1, c_cam2 = st.columns(2)
         
+        with c_cam1:
+            # Modelo Dispositivo
+            modelos_opt = ["Samsung Galaxy S22", "Samsung Galaxy S21", "Xiaomi Redmi Note", "Motorola Edge", "Otro"]
+            mod_sel = st.selectbox("Modelo de Smartphone / Cámara:", modelos_opt)
+            modelo_dispositivo = st.text_input("Especifique modelo:") if mod_sel == "Otro" else mod_sel
+            
+            # ISO
+            iso_val = st.text_input("ISO / Sensibilidad:", value="100")
+            
+            # Apertura
+            aperturas_opt = ["1/10", "1/30", "1/60", "1/100", "Otro"]
+            ap_sel = st.selectbox("Apertura / Tiempo de Exposición:", aperturas_opt)
+            apertura_val = st.text_input("Especifique apertura/exposición:") if ap_sel == "Otro" else ap_sel
+
+        with c_cam2:
+            # WB
+            wb_opt = ["5500K (Soleado)", "Incandescente", "Fluorescente", "Automático", "Otro"]
+            wb_sel = st.selectbox("Balance de Blancos (WB):", wb_opt)
+            wb_val = st.text_input("Especifique Balance de Blancos:") if wb_sel == "Otro" else wb_sel
+            
+            # Enfoque
+            enfoque_val = st.text_input("Modo de Enfoque:", value="Manual / Infinito")
+
+    st.subheader("Subida de Secuencia Temporal")
+    
+    fuente_origen = st.radio("Fuente de las imágenes:", ["📁 Almacenamiento Local / Móvil", "☁️ Google Drive (Carpeta Compartida)"], horizontal=True)
+    
+    if fuente_origen == "📁 Almacenamiento Local / Móvil":
+        archivos_subidos = st.file_uploader("Arrastrá las imágenes (.jpg, .png) desde tu equipo o móvil", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+        if archivos_subidos:
+            st.session_state.archivos_subidos = sorted(archivos_subidos, key=lambda x: x.name)
+            st.info(f"📁 {len(st.session_state.archivos_subidos)} imágenes cargadas correctamente.")
+    else:
+        st.text_input("Ingrese ID de la carpeta compartida en Google Drive:")
+        st.info("☁️ Conexión con Drive lista para vincular vía API.")
+
+    if "archivos_subidos" in st.session_state and st.session_state.archivos_subidos:
         tiene_t0 = st.checkbox("¿La primera foto corresponde a un Blanco / Control previo a la reacción (t=0)?")
         st.session_state.tiene_t0 = tiene_t0
 
 # -------------------------------------------------------------------------
-# MÓDULO 4: SEGMENTACIÓN ESPACIAL Y ASIGNACIÓN DE GRADILLA
+# MÓDULOS 4, 5 Y 6 (MAQUETADO DE CONTINUIDAD)
 # -------------------------------------------------------------------------
 with tab4:
     st.header("🎯 Módulo 4: Detección Automática de ROIs y Mapeo")
-    
-    if "archivos_subidos" not in st.session_state or not st.session_state.archivos_subidos:
-        st.warning("⚠️ Primero debés cargar imágenes en el Módulo 3.")
-    else:
-        st.write("Acá se ejecutará el algoritmo de segmentación S-G (oculto por defecto para el usuario).")
-        st.info("Parámetros S-G espaciales preseteados internamente en modo óptimo.")
+    st.info("Segmentación espacial oculta con asignación de gradilla.")
 
-# -------------------------------------------------------------------------
-# MÓDULO 5: ANÁLISIS CINÉTICO, CORTE DE SEDIMENTACIÓN Y DERIVADAS
-# -------------------------------------------------------------------------
 with tab5:
     st.header("📈 Módulo 5: Análisis Cinético y Tasas de Reacción")
-    
     t_corte = st.slider("⏳ Tiempo de inicio de análisis (Ignorar sedimentación inicial en min):", 0.0, 10.0, 5.0, step=0.5)
-    st.caption(f"Las derivadas dG/dt y dRatio/dt se calcularán únicamente para t > {t_corte} min.")
 
-# -------------------------------------------------------------------------
-# MÓDULO 6: EXPORTACIÓN DE DATOS, REPORTE PDF Y GOOGLE SHEETS
-# -------------------------------------------------------------------------
 with tab6:
     st.header("📄 Módulo 6: Descarga de Resultados y Registro Centralizado")
-    st.write("Generación automática del PDF de reporte y sincronización de datos.")
+    st.write("Módulo final de exportación a CSV, generación de PDF y sync con Google Sheets.")
