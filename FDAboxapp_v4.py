@@ -156,23 +156,21 @@ with tab4:
     if "archivos_subidos" not in st.session_state or not st.session_state.archivos_subidos:
         st.warning("⚠️ Primero cargá las fotos en el Módulo 3.")
     else:
-        st.markdown("### 🛠️ Ajuste y Visualización de Segmentación")
-        
-        # Parámetro ajustable por el usuario para forzar la detección si la imagen es rebelde
-        prominencia = st.slider("Sensibilidad de detección (Bajar si detecta 0 posillos, subir si detecta de más):", min_value=1, max_value=50, value=10, step=1)
+        st.markdown("### 🛠️ Visualización de Segmentación (Basado en S-G v3)")
         
         bytes_primera = st.session_state.archivos_subidos[0].getvalue()
         img_np_0 = cv2.imdecode(np.frombuffer(bytes_primera, np.uint8), cv2.IMREAD_COLOR)
         
         if img_np_0 is not None:
-            # Convertir a RGB para que Streamlit la muestre con los colores correctos
+            # Convertir a RGB para mostrar y a GRAY para el algoritmo original
             img_rgb = cv2.cvtColor(img_np_0, cv2.COLOR_BGR2RGB)
             gray_0 = cv2.cvtColor(img_np_0, cv2.COLOR_BGR2GRAY)
             perfil_x = np.mean(gray_0, axis=0)
             
+            # --- PARÁMETROS EXACTOS DE V3 ---
             p_sg_x = savgol_filter(perfil_x, window_length=51, polyorder=3)
-            # Acá usamos la prominencia del slider
-            picos_x, _ = find_peaks(p_sg_x, distance=img_np_0.shape[1]//8, prominence=prominencia)
+            picos_x, _ = find_peaks(p_sg_x, distance=img_np_0.shape[1]//6, prominence=10)
+            # --------------------------------
             
             # --- SECCIÓN VISUAL ---
             col_v1, col_v2 = st.columns(2)
@@ -180,15 +178,15 @@ with tab4:
                 st.markdown("**1. Visión de la Cámara (Centro de los posillos detectados)**")
                 img_display = img_rgb.copy()
                 for px in picos_x:
-                    # Dibujar línea vertical roja donde detecta el ROI
+                    # Línea roja marcando detección
                     cv2.line(img_display, (px, 0), (px, img_display.shape[0]), (255, 0, 0), max(2, img_display.shape[1]//200)) 
                 st.image(img_display, use_container_width=True)
                 
             with col_v2:
-                st.markdown("**2. Perfil de Intensidad (Radiografía del algoritmo)**")
+                st.markdown("**2. Perfil de Intensidad (Filtro Savitzky-Golay)**")
                 fig_p, ax_p = plt.subplots(figsize=(6, 4))
-                ax_p.plot(p_sg_x, label="Perfil Lumínico", color='blue')
-                ax_p.plot(picos_x, p_sg_x[picos_x], "x", color='red', markersize=10, label="Picos Encontrados")
+                ax_p.plot(p_sg_x, label="Perfil Lumínico SG", color='blue')
+                ax_p.plot(picos_x, p_sg_x[picos_x], "x", color='red', markersize=10, label="Picos Detectados")
                 ax_p.set_xlabel("Ancho de la imagen (píxeles)")
                 ax_p.set_ylabel("Intensidad Promedio")
                 ax_p.legend()
@@ -196,7 +194,7 @@ with tab4:
             # ----------------------
 
             if len(picos_x) == 0:
-                st.error("🚨 **Cero posillos detectados.** Probá bajar la Sensibilidad en la barra deslizante de arriba. Si sigue en 0, es muy probable que la foto esté torcida o muy oscura.")
+                st.error("🚨 **Cero posillos detectados.** (Revisá la gráfica de la derecha para ver si la foto está muy oscura o el perfil es totalmente plano).")
             else:
                 st.success(f"🎯 ROIs/Posillos detectados automáticamente: **{len(picos_x)} posillos**")
                 
