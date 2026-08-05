@@ -16,11 +16,9 @@ from scipy.signal import savgol_filter, find_peaks
 st.set_page_config(page_title="Sistema FDA v4 - Modular", layout="wide")
 st.title("🔬 Plataforma Integral de Análisis FDA (Sensor de Suelo)")
 
-# Inicializar estado persistente
 if "exp_id" not in st.session_state:
     st.session_state.exp_id = f"EXP-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
-# Mensaje de cabecera
 st.caption(f"🆔 **ID de Sesión Activa:** `{st.session_state.exp_id}`")
 
 # =========================================================================
@@ -40,16 +38,13 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # -------------------------------------------------------------------------
 with tab1:
     st.header("📋 Módulo 1: Registro del Experimento")
-    
-    # Selector de Modo de Trabajo
     modo_trabajo = st.radio("Acción a realizar:", ["➕ Crear Nuevo Ensayo", "🔍 Consultar Ensayo Existente (Histórico)"], horizontal=True)
     
     if modo_trabajo == "🔍 Consultar Ensayo Existente (Histórico)":
-        st.info("ℹ️ Función de búsqueda habilitada: Los ensayos guardados en Google Sheets aparecerán acá.")
-        st.selectbox("Seleccione un Ensayo Previor:", ["EXP-20260805-185212 (Ensayo_Demo)"])
+        st.info("ℹ️ Módulo histórico listo para vincular con la base de registros.")
+        st.selectbox("Seleccione un Ensayo Previo:", ["EXP-20260805-185212 (Ensayo_Demo)"])
     else:
         st.markdown("Ingrese los metadatos generales para la trazabilidad del análisis.")
-        
         col1, col2 = st.columns(2)
         with col1:
             fecha_exp = st.date_input("Fecha del Experimento:", value=date.today())
@@ -67,16 +62,11 @@ with tab1:
             inicio_reaccion = st.selectbox("La reacción se larga adicionando:", ["Tierra", "FDA"])
             
             preincubacion = st.checkbox("Pre-incubación (Buffer con tierra sin FDA)")
-            
-            # Lógica dinámica para pre-incubación
             if inicio_reaccion == "Tierra":
                 tiempo_preinc = 0
-                st.info("ℹ️ Al largar la reacción adicionando Tierra, el tiempo de pre-incubación se fija en 0 min.")
+                st.info("ℹ️ Al largar adicionando Tierra, la pre-incubación se fija en 0 min por defecto.")
             else:
-                if preincubacion:
-                    tiempo_preinc = st.number_input("Tiempo de pre-incubación (minutos):", min_value=1, value=15)
-                else:
-                    tiempo_preinc = 0
+                tiempo_preinc = st.number_input("Tiempo de pre-incubación (minutos):", min_value=1, value=15) if preincubacion else 0
             
             comentarios_m1 = st.text_area("Comentarios del Módulo 1:", value="")
 
@@ -94,26 +84,21 @@ with tab1:
             "tiempo_preinc": tiempo_preinc,
             "comentarios": comentarios_m1
         }
-        st.success("✅ Metadatos iniciales guardados.")
+        st.success("✅ Metadatos guardados.")
 
 # -------------------------------------------------------------------------
 # MÓDULO 2: PREPROCESAMIENTO DE MUESTRAS DE SUELO
 # -------------------------------------------------------------------------
 with tab2:
     st.header("🌱 Módulo 2: Preprocesamiento de Suelo")
-    
     col_s1, col_s2 = st.columns(2)
     with col_s1:
         tamizado = st.checkbox("¿Suelo Tamizado?", value=True)
         malla_tamiz = st.text_input("Apertura de Malla (ej: < 2mm):", value="< 2 mm") if tamizado else "N/A"
         
-        # Desplegable con opción "Otro"
         opciones_secado = ["Secado al Aire", "Fresco / Humedad de Campo", "Secado en Estufa (30-40°C)", "Otro"]
         secado_sel = st.selectbox("Estado de Humedad / Secado:", opciones_secado)
-        if secado_sel == "Otro":
-            secado_detalle = st.text_input("Especifique estado de humedad/secado:")
-        else:
-            secado_detalle = secado_sel
+        secado_detalle = st.text_input("Especifique estado de humedad/secado:") if secado_sel == "Otro" else secado_sel
 
     with col_s2:
         pesado_preciso = st.checkbox("Muestras pesadas en balanza analítica", value=True)
@@ -129,65 +114,200 @@ with tab2:
     }
 
 # -------------------------------------------------------------------------
-# MÓDULO 3: CARGA DE FOTOS Y METADATOS DE CÁMARA
+# MÓDULO 3: CARGA DE FOTOS LOCALES Y METADATOS DE CÁMARA
 # -------------------------------------------------------------------------
 with tab3:
-    st.header("📸 Módulo 3: Carga de Fotos y Parámetros del Dispositivo")
+    st.header("📸 Módulo 3: Carga de Fotos y Parámetros de Cámara")
     
-    with st.expander("📷 Registro de Parámetros de Cámara / Smartphone", expanded=True):
+    with st.expander("📷 Registro de Parámetros de Cámara / Smartphone", expanded=False):
         c_cam1, c_cam2 = st.columns(2)
-        
         with c_cam1:
-            # Modelo Dispositivo
-            modelos_opt = ["Samsung Galaxy S22", "Samsung Galaxy S21", "Xiaomi Redmi Note", "Motorola Edge", "Otro"]
-            mod_sel = st.selectbox("Modelo de Smartphone / Cámara:", modelos_opt)
+            mod_sel = st.selectbox("Modelo de Smartphone / Cámara:", ["Samsung Galaxy S22", "Samsung Galaxy S21", "Xiaomi Redmi Note", "Motorola Edge", "Otro"])
             modelo_dispositivo = st.text_input("Especifique modelo:") if mod_sel == "Otro" else mod_sel
-            
-            # ISO
             iso_val = st.text_input("ISO / Sensibilidad:", value="100")
-            
-            # Apertura
-            aperturas_opt = ["1/10", "1/30", "1/60", "1/100", "Otro"]
-            ap_sel = st.selectbox("Apertura / Tiempo de Exposición:", aperturas_opt)
-            apertura_val = st.text_input("Especifique apertura/exposición:") if ap_sel == "Otro" else ap_sel
-
+            ap_sel = st.selectbox("Apertura / Exposición:", ["1/10", "1/30", "1/60", "1/100", "Otro"])
+            apertura_val = st.text_input("Especifique apertura:") if ap_sel == "Otro" else ap_sel
         with c_cam2:
-            # WB
-            wb_opt = ["5500K (Soleado)", "Incandescente", "Fluorescente", "Automático", "Otro"]
-            wb_sel = st.selectbox("Balance de Blancos (WB):", wb_opt)
-            wb_val = st.text_input("Especifique Balance de Blancos:") if wb_sel == "Otro" else wb_sel
-            
-            # Enfoque
+            wb_sel = st.selectbox("Balance de Blancos (WB):", ["5500K (Soleado)", "Incandescente", "Fluorescente", "Automático", "Otro"])
+            wb_val = st.text_input("Especifique WB:") if wb_sel == "Otro" else wb_sel
             enfoque_val = st.text_input("Modo de Enfoque:", value="Manual / Infinito")
 
-    st.subheader("Subida de Secuencia Temporal")
+    st.subheader("Subida de Imágenes desde Carpeta Local / Smartphone")
+    archivos_subidos = st.file_uploader("Arrastrá la secuencia de fotos de la reacción (.jpg, .png)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
     
-    fuente_origen = st.radio("Fuente de las imágenes:", ["📁 Almacenamiento Local / Móvil", "☁️ Google Drive (Carpeta Compartida)"], horizontal=True)
-    
-    if fuente_origen == "📁 Almacenamiento Local / Móvil":
-        archivos_subidos = st.file_uploader("Arrastrá las imágenes (.jpg, .png) desde tu equipo o móvil", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-        if archivos_subidos:
-            st.session_state.archivos_subidos = sorted(archivos_subidos, key=lambda x: x.name)
-            st.info(f"📁 {len(st.session_state.archivos_subidos)} imágenes cargadas correctamente.")
-    else:
-        st.text_input("Ingrese ID de la carpeta compartida en Google Drive:")
-        st.info("☁️ Conexión con Drive lista para vincular vía API.")
-
-    if "archivos_subidos" in st.session_state and st.session_state.archivos_subidos:
-        tiene_t0 = st.checkbox("¿La primera foto corresponde a un Blanco / Control previo a la reacción (t=0)?")
-        st.session_state.tiene_t0 = tiene_t0
+    if archivos_subidos:
+        st.session_state.archivos_subidos = sorted(archivos_subidos, key=lambda x: x.name)
+        st.success(f"📁 {len(st.session_state.archivos_subidos)} imágenes cargadas correctamente.")
+        st.session_state.tiene_t0 = st.checkbox("¿La primera foto corresponde a un Control / Blanco previo a la reacción (t=0)?")
 
 # -------------------------------------------------------------------------
-# MÓDULOS 4, 5 Y 6 (MAQUETADO DE CONTINUIDAD)
+# MÓDULO 4: SEGMENTACIÓN AUTOMÁTICA DE ROIs Y ASIGNACIÓN DE MASAS
 # -------------------------------------------------------------------------
 with tab4:
-    st.header("🎯 Módulo 4: Detección Automática de ROIs y Mapeo")
-    st.info("Segmentación espacial oculta con asignación de gradilla.")
+    st.header("🎯 Módulo 4: Detección Automática de ROIs y Mapeo de Muestras")
+    
+    if "archivos_subidos" not in st.session_state or not st.session_state.archivos_subidos:
+        st.warning("⚠️ Primero cargá las fotos en el Módulo 3.")
+    else:
+        st.markdown("Procesamiento automático de perfiles espaciales mediante calibración Savitzky-Golay interna.")
+        
+        bytes_primera = st.session_state.archivos_subidos[0].getvalue()
+        img_np_0 = cv2.imdecode(np.frombuffer(bytes_primera, np.uint8), cv2.IMREAD_COLOR)
+        
+        if img_np_0 is not None:
+            gray_0 = cv2.cvtColor(img_np_0, cv2.COLOR_BGR2GRAY)
+            perfil_x = np.mean(gray_0, axis=0)
+            
+            p_sg_x = savgol_filter(perfil_x, window_length=51, polyorder=3)
+            picos_x, _ = find_peaks(p_sg_x, distance=img_np_0.shape[1]//6, prominence=10)
+            
+            st.info(f"🎯 ROIs/Posillos detectados automáticamente: **{len(picos_x)} posillos**")
+            
+            st.subheader("Configuración de Muestras y Masa por Posillo (g)")
+            cols_roi = st.columns(min(len(picos_x), 4)) if len(picos_x) > 0 else [st]
+            
+            datos_rois = {}
+            for i, px in enumerate(picos_x):
+                col_idx = i % len(cols_roi)
+                with cols_roi[col_idx]:
+                    st.markdown(f"**Posillo {i+1}** (x={px})")
+                    nombre_roi = st.text_input(f"Nombre Muestra {i+1}", value=f"Muestra_{i+1}", key=f"n_roi_{i}")
+                    masa_roi = st.number_input(f"Masa (g) Muestra {i+1}", min_value=0.01, value=1.00, step=0.05, key=f"m_roi_{i}")
+                    datos_rois[f"ROI_{i+1}"] = {"x": px, "nombre": nombre_roi, "masa": masa_roi}
+            
+            st.session_state.datos_rois = datos_rois
+            
+            if st.button("🚀 Ejecutar Extracción de Intensidades en el Tiempo"):
+                progress_bar = st.progress(0)
+                resultados = []
+                
+                for idx, arch in enumerate(st.session_state.archivos_subidos):
+                    file_bytes = arch.getvalue()
+                    img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    
+                    if img is not None:
+                        t_min = idx * 1.0
+                        
+                        for roi_id, info in datos_rois.items():
+                            px = info["x"]
+                            y_center = img.shape[0] // 2
+                            r_win = 15
+                            patch = img[max(0, y_center-r_win):min(img.shape[0], y_center+r_win), max(0, px-r_win):min(img.shape[1], px+r_win)]
+                            
+                            b_val = np.mean(patch[:, :, 0])
+                            g_val = np.mean(patch[:, :, 1])
+                            r_val = np.mean(patch[:, :, 2])
+                            
+                            resultados.append({
+                                "Tiempo_min": t_min,
+                                "Imagen": arch.name,
+                                "ROI": roi_id,
+                                "Muestra": info["nombre"],
+                                "Masa_g": info["masa"],
+                                "R": r_val,
+                                "G": g_val,
+                                "B": b_val,
+                                "Ratio_GB": g_val / (b_val + 1e-6)
+                            })
+                    progress_bar.progress((idx + 1) / len(st.session_state.archivos_subidos))
+                
+                df_raw = pd.DataFrame(resultados)
+                st.session_state.df_raw = df_raw
+                st.success("✅ Extracción de intensidades completada con éxito. Pasá al Módulo 5.")
 
+# -------------------------------------------------------------------------
+# MÓDULO 5: ANÁLISIS CINÉTICO, CORTE DE SEDIMENTACIÓN Y DERIVADAS
+# -------------------------------------------------------------------------
 with tab5:
     st.header("📈 Módulo 5: Análisis Cinético y Tasas de Reacción")
-    t_corte = st.slider("⏳ Tiempo de inicio de análisis (Ignorar sedimentación inicial en min):", 0.0, 10.0, 5.0, step=0.5)
+    
+    if "df_raw" not in st.session_state or st.session_state.df_raw is None:
+        st.warning("⚠️ Primero ejecutá la extracción de intensidades en el Módulo 4.")
+    else:
+        df_raw = st.session_state.df_raw.copy()
+        
+        st.subheader("⚙️ Configuración del Filtro Cinético")
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            t_corte = st.slider("⏳ Ventana de Sedimentación (Ignorar primeros N min):", 0.0, 10.0, 5.0, step=0.5)
+            st.caption(f"Los datos entre 0 y {t_corte} min serán ignorados para evitar artefactos de sedimentación.")
+        
+        with col_c2:
+            normalizar_masa = st.checkbox("Normalizar Intensidades por Masa (Intensidad / g)", value=True)
+            usar_ratio = st.checkbox("Analizar Ratio Verde/Azul (G/B) en lugar de Canal G puro", value=False)
+            
+        df_fit = df_raw[df_raw["Tiempo_min"] >= t_corte].copy()
+        col_target = "Ratio_GB" if usar_ratio else "G"
+        
+        if normalizar_masa:
+            df_fit["Valor_Analisis"] = df_fit[col_target] / df_fit["Masa_g"]
+            label_y = f"{col_target} / g"
+        else:
+            df_fit["Valor_Analisis"] = df_fit[col_target]
+            label_y = col_target
 
+        st.subheader("📊 Gráficas Cinéticas y Derivadas (dG/dt)")
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        df_export_list = []
+        
+        for muestra in df_fit["Muestra"].unique():
+            sub_df = df_fit[df_fit["Muestra"] == muestra].sort_values("Tiempo_min")
+            
+            t_vals = sub_df["Tiempo_min"].values
+            y_vals = sub_df["Valor_Analisis"].values
+            
+            ax1.plot(t_vals, y_vals, 'o-', label=muestra)
+            
+            if len(t_vals) >= 5:
+                dt_prom = np.mean(np.diff(t_vals)) if len(t_vals) > 1 else 1.0
+                window_l = 5 if len(t_vals) >= 5 else len(t_vals)
+                if window_l % 2 == 0:
+                    window_l -= 1
+                    
+                deriv_sg = savgol_filter(y_vals, window_length=window_l, polyorder=2, deriv=1, delta=dt_prom)
+                ax2.plot(t_vals, deriv_sg, 's--', label=f"d({muestra})/dt")
+                
+                sub_df["Derivada_dY_dt"] = deriv_sg
+            else:
+                sub_df["Derivada_dY_dt"] = 0
+                
+            df_export_list.append(sub_df)
+
+        ax1.set_xlabel("Tiempo (min)")
+        ax1.set_ylabel(label_y)
+        ax1.set_title(f"Cinética de Reacción (t > {t_corte} min)")
+        ax1.grid(True, linestyle="--", alpha=0.5)
+        ax1.legend()
+        
+        ax2.set_xlabel("Tiempo (min)")
+        ax2.set_ylabel(f"d({label_y})/dt")
+        ax2.set_title("Velocidad de Reacción (Derivada Temporal)")
+        ax2.grid(True, linestyle="--", alpha=0.5)
+        ax2.legend()
+        
+        st.pyplot(fig)
+        
+        if df_export_list:
+            st.session_state.df_export = pd.concat(df_export_list)
+            st.success("✅ Análisis cinético y derivadas calculadas. Avanzá al Módulo 6 para exportar.")
+
+# -------------------------------------------------------------------------
+# MÓDULO 6: EXPORTACIÓN DE DATOS Y REPORTE
+# -------------------------------------------------------------------------
 with tab6:
-    st.header("📄 Módulo 6: Descarga de Resultados y Registro Centralizado")
-    st.write("Módulo final de exportación a CSV, generación de PDF y sync con Google Sheets.")
+    st.header("📄 Módulo 6: Descarga de Resultados")
+    
+    if "df_export" not in st.session_state or st.session_state.df_export is None:
+        st.warning("⚠️ No hay datos calculados. Ejecutá el Módulo 5.")
+    else:
+        st.subheader("📥 Exportación de Tabla Completa (CSV)")
+        csv_bytes = st.session_state.df_export.to_csv(index=False).encode('utf-8')
+        
+        st.download_button(
+            label="💾 Descargar CSV Completo (Cinética + Derivadas)",
+            data=csv_bytes,
+            file_name=f"{st.session_state.exp_id}_resultados.csv",
+            mime="text/csv"
+        )
+        st.dataframe(st.session_state.df_export, use_container_width=True)
