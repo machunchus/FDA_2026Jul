@@ -18,7 +18,7 @@ st.title("🔬 Herramienta de Análisis FDA (Sensor de Suelo)")
 
 if "procesado" not in st.session_state:
     st.session_state.procesado = False
-    st.session_state.df_resultados = None
+    st.session_state.df = None
 
 # =========================================================================
 # BARRA LATERAL (CONTROLES DE PARÁMETROS)
@@ -263,48 +263,71 @@ if archivos_subidos:
                     h_verde[idx, r_idx] = m_v; h_azul[idx, r_idx] = m_a
                     h_ratios[idx, r_idx] = m_v / (m_a if m_a > 0 else 1.0)
                 
-                # ACÁ ESTABA EL ERROR. AHORA SÍ EN DOS LÍNEAS DISTINTAS:
                 del frame_bgr, c_a, c_v
                 if idx % 10 == 0: 
                     gc.collect()
 
-            w_cin = w_sg_cin if w_sg_cin <= num_img else (num_img if num_img % 2 != 0 else num_img - 1)
-            poly_cin = poly_sg_cin if poly_sg_cin < w_cin else w_cin - 1
-            margen = w_cin // 2
-            
-            h_deriv_verde = np.zeros_like(h_verde); h_deriv_azul = np.zeros_like(h_azul); h_deriv_ratios = np.zeros_like(h_ratios)
-            
-            for r in range(n_r):
-                dv = savgol_filter(h_verde[:, r], window_length=w_cin, polyorder=poly_cin, deriv=1)
-                da = savgol_filter(h_azul[:, r], window_length=w_cin, polyorder=poly_cin, deriv=1)
-                dr = savgol_filter(h_ratios[:, r], window_length=w_cin, polyorder=poly_cin, deriv=1)
-                
-                dv[:margen], dv[-margen:] = np.nan, np.nan
-                da[:margen], da[-margen:] = np.nan, np.nan
-                dr[:margen], dr[-margen:] = np.nan, np.nan
-                
-                h_deriv_verde[:, r], h_deriv_azul[:, r], h_deriv_ratios[:, r] = dv, da, dr
-
-            cols = ["Nombre_Archivo", "Tiempo_Rel_Minutos"]
-            for r in range(n_r):
-                cols.extend([f"{nombres_muestras[r]}_Verde", f"{nombres_muestras[r]}_dG/dt", 
-                             f"{nombres_muestras[r]}_Azul", f"{nombres_muestras[r]}_dB/dt", 
-                             f"{nombres_muestras[r]}_Ratio", f"{nombres_muestras[r]}_dRatio/dt", f"{nombres_muestras[r]}_Masa_g"])
-                
-            datos = []
-            for i in range(num_img):
-                fila = [archivos_ordenados[i].name, t_rel_min[i]]
-                for r in range(n_r):
-                    fila.extend([h_verde[i,r], h_deriv_verde[i,r], h_azul[i,r], h_deriv_azul[i,r], h_ratios[i,r], h_deriv_ratios[i,r], masas_muestras[r]])
-                datos.append(fila)
-
-            st.session_state.df = pd.DataFrame(datos, columns=cols)
+            st.session_state.archivos_nombres = [f.name for f in archivos_ordenados]
             st.session_state.t_rel_min = t_rel_min
             st.session_state.h_verde, st.session_state.h_azul, st.session_state.h_ratios = h_verde, h_azul, h_ratios
-            st.session_state.h_dverde, st.session_state.h_dazul, st.session_state.h_dratio = h_deriv_verde, h_deriv_azul, h_deriv_ratios
             st.session_state.nombres_finales, st.session_state.masas_finales = nombres_muestras, masas_muestras
+            st.session_state.num_img = num_img
+            st.session_state.freq_roi = freq_roi
+            st.session_state.w_r, st.session_state.h_r = st.session_state.w_roi_fijo, st.session_state.h_roi_fijo
+            st.session_state.procesado = True
+
+    # =========================================================================
+    # 5. RENDERIZADO DE RESULTADOS FINALES Y DERIVACIÓN DINÁMICA
+    # =========================================================================
+    if st.session_state.procesado:
+        t = st.session_state.t_rel_min
+        lbls = st.session_state.nombres_finales
+        num_img = st.session_state.num_img
+        n_r = st.session_state.n_rois_base
+        
+        # --- CÁLCULO DINÁMICO DE DERIVADAS (Responde a los sliders en tiempo real con delta=dt) ---
+        dt_promedio = np.mean(np.diff(t)) if len(t) > 1 else 1.0
+        
+        w_cin = w_sg_cin if w_sg_cin <= num_img else (num_img if num_img % 2 != 0 else num_img - 1)
+        poly_cin = poly_sg_cin if poly_sg_cin < w_cin else w_cin - 1
+        margen = w_cin // 2
+        
+        h_deriv_verde = np.zeros_like(st.session_state.h_verde)
+        h_deriv_azul = np.zeros_like(st.session_state.h_azul)
+        h_deriv_ratios = np.zeros_like(st.session_state.h_ratios)
+        
+        for r in range(n_r):
+            dv = savgol_filter(st.session_state.h_verde[:, r], window_length=w_cin, polyorder=poly_cin, deriv=1, delta=dt_promedio)
+            da = savgol_filter(st.session_state.h_azul[:, r], window_length=w_cin, polyorder=poly_cin, deriv=1, delta=dt_promedio)
+            dr = savgol_filter(st.session_state.h_ratios[:, r], window_length=w_cin, polyorder=poly_cin, deriv=1, delta=dt_promedio)
             
-            reporte_str = f"""========================================
+            dv[:margen], dv[-margen:] = np.nan, np.nan
+            da[:margen], da[-margen:] = np.nan, np.nan
+            dr[:margen], dr[-margen:] = np.nan, np.nan
+            
+            h_deriv_verde[:, r], h_deriv_azul[:, r], h_deriv_ratios[:, r] = dv, da, dr
+
+        # --- GENERACIÓN DEL DATAFRAME COMPLETO PARA EXPORTAR ---
+        cols = ["Nombre_Archivo", "Tiempo_Rel_Minutos"]
+        for r in range(n_r):
+            cols.extend([f"{lbls[r]}_Verde", f"{lbls[r]}_dG/dt", 
+                         f"{lbls[r]}_Azul", f"{lbls[r]}_dB/dt", 
+                         f"{lbls[r]}_Ratio", f"{lbls[r]}_dRatio/dt", f"{lbls[r]}_Masa_g"])
+            
+        datos = []
+        for i in range(num_img):
+            fila = [st.session_state.archivos_nombres[i], t[i]]
+            for r in range(n_r):
+                fila.extend([st.session_state.h_verde[i,r], h_deriv_verde[i,r], 
+                             st.session_state.h_azul[i,r], h_deriv_azul[i,r], 
+                             st.session_state.h_ratios[i,r], h_deriv_ratios[i,r], 
+                             st.session_state.masas_finales[r]])
+            datos.append(fila)
+
+        df_export = pd.DataFrame(datos, columns=cols)
+        
+        # --- REPORTE DE CONFIGURACIÓN ---
+        reporte_str = f"""========================================
 REPORTE DE CONFIGURACIÓN - ANÁLISIS FDA
 ========================================
 Fecha de Análisis: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -312,28 +335,21 @@ Total de Imágenes Procesadas: {num_img}
 Resolución de Imágenes (Alto x Ancho): {st.session_state.alto_px} x {st.session_state.ancho_px} px
 
 [PARÁMETROS ESPACIALES Y DE ROI]
-Frecuencia de re-cálculo de ROI: Cada {freq_roi} imágenes
+Frecuencia de re-cálculo de ROI: Cada {st.session_state.freq_roi} imágenes
 Ventana S-G (Y): {prop_sg_y}% ({w_sg_y} px)
 Ventana S-G (X): {prop_sg_x}% ({w_sg_x} px)
 Polinomio S-G (Detección): {poly_sg}
-Tamaño final de ROI (Ancho x Alto): {w_r} x {h_r} px
+Tamaño final de ROI (Ancho x Alto): {st.session_state.w_r} x {st.session_state.h_r} px
 
 [PARÁMETROS CINÉTICOS]
-Ventana S-G Temporal: {w_sg_cin}
-Polinomio S-G Temporal: {poly_sg_cin}
+Ventana S-G Temporal: {w_cin}
+Polinomio S-G Temporal: {poly_cin}
+Delta Tiempo Promedio: {dt_promedio:.4f} min
 
 [IDENTIFICACIÓN DE MUESTRAS (N={n_r})]
 """
-            for i in range(n_r): reporte_str += f"- ROI {i+1} | Nombre: {nombres_muestras[i]} | Masa: {masas_muestras[i]:.4f} g\n"
-            st.session_state.reporte_txt = reporte_str
-            st.session_state.procesado = True
+        for i in range(n_r): reporte_str += f"- ROI {i+1} | Nombre: {lbls[i]} | Masa: {st.session_state.masas_finales[i]:.4f} g\n"
 
-    # =========================================================================
-    # 5. RENDERIZADO DE RESULTADOS FINALES
-    # =========================================================================
-    if st.session_state.procesado:
-        t = st.session_state.t_rel_min
-        lbls = st.session_state.nombres_finales
         plt.close('all')
 
         st.markdown("---")
@@ -341,39 +357,40 @@ Polinomio S-G Temporal: {poly_sg_cin}
         c1, c2, c3 = st.columns(3)
         with c1:
             fig, ax = plt.subplots(figsize=(5,4)); 
-            for r in range(st.session_state.n_rois_base): ax.plot(t, st.session_state.h_verde[:, r], label=lbls[r])
+            for r in range(n_r): ax.plot(t, st.session_state.h_verde[:, r], label=lbls[r])
             ax.set_title("Verde vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
         with c2:
             fig, ax = plt.subplots(figsize=(5,4)); 
-            for r in range(st.session_state.n_rois_base): ax.plot(t, st.session_state.h_azul[:, r], label=lbls[r])
+            for r in range(n_r): ax.plot(t, st.session_state.h_azul[:, r], label=lbls[r])
             ax.set_title("Azul vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
         with c3:
             fig, ax = plt.subplots(figsize=(5,4)); 
-            for r in range(st.session_state.n_rois_base): ax.plot(t, st.session_state.h_ratios[:, r], label=lbls[r])
+            for r in range(n_r): ax.plot(t, st.session_state.h_ratios[:, r], label=lbls[r])
             ax.set_title("Ratio vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
 
         st.markdown("---")
-        st.subheader("📈 Tasas de Reacción (1ª Derivada S-G)")
+        st.subheader("📈 Tasas de Reacción (1ª Derivada S-G en Minutos)")
         d1, d2, d3 = st.columns(3)
         with d1:
             fig, ax = plt.subplots(figsize=(5,4)); 
-            for r in range(st.session_state.n_rois_base): ax.plot(t, st.session_state.h_dverde[:, r], label=lbls[r])
-            ax.set_title("dVerde/dt vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
+            for r in range(n_r): ax.plot(t, h_deriv_verde[:, r], label=lbls[r])
+            ax.set_title("dVerde/dt (1/min) vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
         with d2:
             fig, ax = plt.subplots(figsize=(5,4)); 
-            for r in range(st.session_state.n_rois_base): ax.plot(t, st.session_state.h_dazul[:, r], label=lbls[r])
-            ax.set_title("dAzul/dt vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
+            for r in range(n_r): ax.plot(t, h_deriv_azul[:, r], label=lbls[r])
+            ax.set_title("dAzul/dt (1/min) vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
         with d3:
             fig, ax = plt.subplots(figsize=(5,4)); 
-            for r in range(st.session_state.n_rois_base): ax.plot(t, st.session_state.h_dratio[:, r], label=lbls[r])
-            ax.set_title("dRatio/dt vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
+            for r in range(n_r): ax.plot(t, h_deriv_ratios[:, r], label=lbls[r])
+            ax.set_title("dRatio/dt (1/min) vs Minutos"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7); st.pyplot(fig); plt.close(fig)
 
         st.markdown("---")
         st.subheader("💾 Descarga de Resultados")
         down_col1, down_col2 = st.columns(2)
         with down_col1:
-            st.download_button("📥 Descargar Tabla (CSV)", st.session_state.df.to_csv(index=False).encode('utf-8'), f"cinetica_fda_{int(time.time())}.csv", "text/csv")
+            st.download_button("📥 Descargar Tabla Completa (CSV)", df_export.to_csv(index=False).encode('utf-8'), f"cinetica_fda_{int(time.time())}.csv", "text/csv")
         with down_col2:
-            st.download_button("📝 Descargar Reporte de Configuración (TXT)", st.session_state.reporte_txt.encode('utf-8'), f"reporte_config_{int(time.time())}.txt", "text/plain")
+            st.download_button("📝 Descargar Reporte de Configuración (TXT)", reporte_str.encode('utf-8'), f"reporte_config_{int(time.time())}.txt", "text/plain")
             
-        st.dataframe(st.session_state.df.head(10).style.format(precision=4, na_rep='NaN'), use_container_width=True)
+        st.markdown("**Vista Previa de la Tabla (Primeras 10 filas):**")
+        st.dataframe(df_export.head(10).style.format(precision=4, na_rep='NaN'), use_container_width=True)
