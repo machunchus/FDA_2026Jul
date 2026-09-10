@@ -8,20 +8,11 @@ from datetime import datetime
 import plotly.graph_objects as go
 from scipy.signal import savgol_filter, find_peaks
 
-# Manejo de librerías para PDF
-try:
-    from fpdf import FPDF
-    import tempfile
-    import os
-    pdf_disponible = True
-except ImportError:
-    pdf_disponible = False
-
 # =========================================================================
 # CONFIGURACIÓN E INICIALIZACIÓN
 # =========================================================================
-st.set_page_config(page_title="Análisis FDA v3.6 - Fix Plotly/PDF", layout="wide")
-st.title("🔬 Análisis FDA - Matriz 3x4 Interactiva con Ratio R/R₀")
+st.set_page_config(page_title="Análisis FDA - Interactividad Total", layout="wide")
+st.title("🔬 Análisis FDA - Matriz 3x4 Interactiva")
 
 if "procesado" not in st.session_state:
     st.session_state.procesado = False
@@ -29,12 +20,12 @@ if "procesado" not in st.session_state:
 # =========================================================================
 # CONTROLES DE PARÁMETROS (BARRA LATERAL)
 # =========================================================================
-st.sidebar.header("⚙️ Configuración del Análisis")
+st.sidebar.header("⚙️ Configuración")
 opcion_rotar = st.sidebar.selectbox("Rotación de Cámara:", ["Sin Rotación", "180 Grados", "90 Grados Horario", "90 Grados Antihorario"])
 dict_rotacion = {"Sin Rotación": None, "180 Grados": cv2.ROTATE_180, "90 Grados Horario": cv2.ROTATE_90_CLOCKWISE, "90 Grados Antihorario": cv2.ROTATE_90_COUNTERCLOCKWISE}
 rotacion_seleccionada = dict_rotacion[opcion_rotar]
 
-metodo_estadistico = st.sidebar.radio("Cálculo de Intensidad ROI:", ["Mediana (Recomendado)", "Promedio"], index=0)
+metodo_estadistico = st.sidebar.radio("Cálculo de Intensidad:", ["Mediana", "Promedio"], index=0)
 
 if "ancho_px" not in st.session_state: st.session_state.ancho_px = 1280
 if "alto_px" not in st.session_state: st.session_state.alto_px = 960
@@ -56,7 +47,6 @@ factor_reduccion = st.sidebar.slider("Factor reducción ROI:", 0.0, 0.45, 0.20, 
 # 1. CARGA DE IMÁGENES
 # =========================================================================
 st.subheader("🗂️ 1. Carga de Imágenes Secuenciales")
-st.info("La **Foto 0** será el blanco (t < 0). La **Foto 1** será el inicio de la reacción (t = 0).")
 archivos_subidos = st.file_uploader("Arrastrá tus fotos aquí", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if archivos_subidos:
@@ -64,122 +54,113 @@ if archivos_subidos:
     num_img = len(archivos_ordenados)
     
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🔄 Rastreo Dinámico de ROIs")
     freq_roi = st.sidebar.slider("Frec. re-cálculo ROI (cada N fotos):", 1, num_img, 1)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📈 Filtros S-G: Cinéticas Temporales")
-    w_sg_cin = st.sidebar.slider(f"Ventana S-G Temporal (5 a {num_img}):", min_value=5, max_value=max(5, num_img), value=min(31, max(5, num_img)), step=2)
-    poly_sg_cin = st.sidebar.slider("Orden Polinomio Derivada:", 1, 5, 2)
+    w_sg_cin = st.sidebar.slider(f"Ventana Temporal (5 a {num_img}):", min_value=5, max_value=max(5, num_img), value=min(31, max(5, num_img)), step=2)
+    poly_sg_cin = st.sidebar.slider("Polinomio Derivada:", 1, 5, 2)
 
     # =========================================================================
-    # 2. SEGMENTACIÓN DE ROIS (DIAGNÓSTICO EN BARRA LATERAL)
+    # 2. SEGMENTACIÓN DE ROIS (CINTA HORIZONTAL)
     # =========================================================================
-    st.sidebar.markdown("---")
+    st.markdown("---")
+    st.subheader("🎞️ Diagnóstico Visual (Cinta Horizontal de Referencias)")
     
     ref_indices = list(range(0, num_img, freq_roi))
     st.session_state.rois_por_ref = {}
     n_rois_base = 0
     w_roi_fijo, h_roi_fijo = 30, 20
     
-    try:
-        # Reemplazamos el contenedor restrictivo por un expansor adaptativo
-        with st.sidebar.expander("🖼️ Diagnóstico Visual (ROIs)", expanded=True):
-            for idx_panel, i in enumerate(ref_indices):
-                archivo = archivos_ordenados[i]
-                img_bytes = archivo.read()
-                img_bgr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-                archivo.seek(0)
-                if rotacion_seleccionada is not None: img_bgr = cv2.rotate(img_bgr, rotacion_seleccionada)
-                
-                st.session_state.alto_px, st.session_state.ancho_px = img_bgr.shape[:2]
-                canal_azul = img_bgr[:, :, 0]
-                
-                perfil_y = np.mean(canal_azul, axis=1)
-                derivada_y = savgol_filter(perfil_y, window_length=w_sg_y, polyorder=poly_sg, deriv=1)
-                y_min = int(np.argmax(derivada_y))
-                y_max = int(np.argmin(derivada_y[y_min:]) + y_min)
-                y_central = (y_min + y_max) // 2
-                alto_banda = y_max - y_min
-
-                franja_azul = canal_azul[y_min:y_max, :]
-                perfil_x = np.mean(franja_azul, axis=0)
-                derivada_x = savgol_filter(perfil_x, window_length=w_sg_x, polyorder=poly_sg, deriv=1)
-                umbral_x = np.max(np.abs(derivada_x)) * 0.15
-                bordes_izq, _ = find_peaks(derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
-                bordes_der, _ = find_peaks(-derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
-
-                lista_centros_x = []
-                for b_izq in bordes_izq:
-                    b_der_cands = bordes_der[bordes_der > b_izq]
-                    if len(b_der_cands) > 0:
-                        b_der = b_der_cands[0]
-                        if int(st.session_state.ancho_px * 0.008) < (b_der - b_izq) < int(st.session_state.ancho_px * 0.08):
-                            lista_centros_x.append((b_izq, b_der, (b_izq + b_der) // 2))
-
-                lista_centros_x.sort(key=lambda x: x[0])
-                
-                if i == 0:
-                    n_rois_base = len(lista_centros_x)
-                    if n_rois_base > 0:
-                        ancho_min = min([b[1] - b[0] for b in lista_centros_x])
-                        red_px = int(ancho_min * factor_reduccion * 2)
-                        w_roi_fijo, h_roi_fijo = ancho_min - red_px, alto_banda - red_px
-                    st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
-                else:
-                    if len(lista_centros_x) != n_rois_base:
-                        lista_centros_x, y_central = st.session_state.rois_por_ref[0]
-                    st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
-
-                img_disp = img_bgr.copy()
-                cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
-                cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
-                for _, _, cx in lista_centros_x:
-                    cv2.rectangle(img_disp, (cx - w_roi_fijo // 2, y_central - h_roi_fijo // 2),
-                                  (cx + w_roi_fijo // 2, y_central + h_roi_fijo // 2), (0, 255, 0), 2)
-                
-                st.image(cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB), caption=f"Ref {i} - {len(lista_centros_x)} ROIs")
-
-                del img_bgr, canal_azul, franja_azul, img_disp; gc.collect()
-            
-        st.session_state.w_roi_fijo = w_roi_fijo
-        st.session_state.h_roi_fijo = h_roi_fijo
-        st.session_state.n_rois_base = n_rois_base
-        st.sidebar.success(f"{n_rois_base} ROIs detectados.")
-
-    except Exception as e:
-        st.error(f"Error en segmentación: {e}"); st.stop()
-
-    # =========================================================================
-    # 3. METADATOS (NOMBRES Y MASAS)
-    # =========================================================================
-    st.markdown("---")
-    st.subheader("🏷️ 2. Identificación de Muestras y Masa Pesada (g)")
+    columnas_img = st.columns(len(ref_indices) if len(ref_indices) > 0 else 1)
     
-    nombres_muestras, masas_muestras = [], []
-    with st.expander("📝 Formulario de Muestras", expanded=True):
-        for i in range(st.session_state.n_rois_base):
-            c_id, c_name, c_mass = st.columns([1, 2, 2])
-            c_id.write(f"**ROI {i+1}**")
-            k_name, k_mass = f"roi_name_val_{i}", f"roi_mass_val_{i}"
-            if k_name not in st.session_state: st.session_state[k_name] = f"Muestra_{i+1}"
-            if k_mass not in st.session_state: st.session_state[k_mass] = 1.0000
-            val_name = c_name.text_input(f"Label {i+1}", value=st.session_state[k_name], label_visibility="collapsed", key=f"ui_str_{i}")
-            val_mass = c_mass.number_input(f"Mass {i+1}", value=st.session_state[k_mass], min_value=0.0001, step=0.0001, format="%.4f", label_visibility="collapsed", key=f"ui_num_{i}")
-            st.session_state[k_name], st.session_state[k_mass] = val_name, val_mass
-            nombres_muestras.append(val_name); masas_muestras.append(val_mass)
+    for idx_panel, i in enumerate(ref_indices):
+        with columnas_img[idx_panel % len(columnas_img)]:
+            archivo = archivos_ordenados[i]
+            img_bytes = archivo.read()
+            img_bgr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+            archivo.seek(0)
+            if rotacion_seleccionada is not None: img_bgr = cv2.rotate(img_bgr, rotacion_seleccionada)
+            
+            st.session_state.alto_px, st.session_state.ancho_px = img_bgr.shape[:2]
+            canal_azul = img_bgr[:, :, 0]
+            
+            perfil_y = np.mean(canal_azul, axis=1)
+            derivada_y = savgol_filter(perfil_y, window_length=w_sg_y, polyorder=poly_sg, deriv=1)
+            y_min = int(np.argmax(derivada_y))
+            y_max = int(np.argmin(derivada_y[y_min:]) + y_min)
+            y_central = (y_min + y_max) // 2
+            alto_banda = y_max - y_min
+
+            franja_azul = canal_azul[y_min:y_max, :]
+            perfil_x = np.mean(franja_azul, axis=0)
+            derivada_x = savgol_filter(perfil_x, window_length=w_sg_x, polyorder=poly_sg, deriv=1)
+            umbral_x = np.max(np.abs(derivada_x)) * 0.15
+            bordes_izq, _ = find_peaks(derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
+            bordes_der, _ = find_peaks(-derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
+
+            lista_centros_x = []
+            for b_izq in bordes_izq:
+                b_der_cands = bordes_der[bordes_der > b_izq]
+                if len(b_der_cands) > 0:
+                    b_der = b_der_cands[0]
+                    if int(st.session_state.ancho_px * 0.008) < (b_der - b_izq) < int(st.session_state.ancho_px * 0.08):
+                        lista_centros_x.append((b_izq, b_der, (b_izq + b_der) // 2))
+
+            lista_centros_x.sort(key=lambda x: x[0])
+            
+            if i == 0:
+                n_rois_base = len(lista_centros_x)
+                if n_rois_base > 0:
+                    ancho_min = min([b[1] - b[0] for b in lista_centros_x])
+                    red_px = int(ancho_min * factor_reduccion * 2)
+                    w_roi_fijo, h_roi_fijo = ancho_min - red_px, alto_banda - red_px
+                st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
+            else:
+                if len(lista_centros_x) != n_rois_base:
+                    lista_centros_x, y_central = st.session_state.rois_por_ref[0]
+                st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
+
+            img_disp = img_bgr.copy()
+            cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
+            cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
+            for _, _, cx in lista_centros_x:
+                cv2.rectangle(img_disp, (cx - w_roi_fijo // 2, y_central - h_roi_fijo // 2),
+                              (cx + w_roi_fijo // 2, y_central + h_roi_fijo // 2), (0, 255, 0), 2)
+            
+            st.image(cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB), caption=f"Ref {i} ({len(lista_centros_x)} ROIs)", use_container_width=True)
+
+            del img_bgr, canal_azul, franja_azul, img_disp; gc.collect()
+            
+    st.session_state.w_roi_fijo = w_roi_fijo
+    st.session_state.h_roi_fijo = h_roi_fijo
+    st.session_state.n_rois_base = n_rois_base
 
     # =========================================================================
-    # 4. EXTRACCIÓN DE SEÑALES Y EJE TEMPORAL
+    # 3. METADATOS (NOMBRES, MASAS Y COLORES)
     # =========================================================================
     st.markdown("---")
-    if st.button("▶️ Lanzar Procesamiento de Lote"):
+    st.subheader("🏷️ 2. Muestras, Masas (g) y Colores")
+    
+    colores_defecto = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+    
+    for i in range(st.session_state.n_rois_base):
+        c_id, c_name, c_mass, c_color = st.columns([1, 3, 2, 1])
+        c_id.write(f"**ROI {i+1}**")
+        
+        # Estos inputs modifican automáticamente el st.session_state sin necesidad de botones extra
+        c_name.text_input(f"Label {i+1}", value=f"Muestra_{i+1}", label_visibility="collapsed", key=f"name_{i}")
+        c_mass.number_input(f"Mass {i+1}", value=1.0000, min_value=0.0001, step=0.0001, format="%.4f", label_visibility="collapsed", key=f"mass_{i}")
+        c_color.color_picker(f"Color {i+1}", value=colores_defecto[i % len(colores_defecto)], label_visibility="collapsed", key=f"color_{i}")
+
+    # =========================================================================
+    # 4. EXTRACCIÓN PESADA (SOLO SE EJECUTA AL HACER CLIC)
+    # =========================================================================
+    st.markdown("---")
+    if st.button("▶️ Lanzar Extracción de Imágenes", use_container_width=True):
         if st.session_state.n_rois_base > 0:
             barra = st.progress(0)
             
             tiempos_dt = [datetime.strptime(f.name.rsplit('.', 1)[0], "%Y-%m-%d_%H-%M-%S") for f in archivos_ordenados]
             t_ref = tiempos_dt[1] if len(tiempos_dt) > 1 else tiempos_dt[0]
-            t_rel_min = np.array([(t - t_ref).total_seconds() / 60.0 for t in tiempos_dt])
+            st.session_state.t_rel_min = np.array([(t - t_ref).total_seconds() / 60.0 for t in tiempos_dt])
 
             n_r = st.session_state.n_rois_base
             h_verde, h_azul = np.zeros((num_img, n_r)), np.zeros((num_img, n_r))
@@ -205,20 +186,17 @@ if archivos_subidos:
                 del frame_bgr; gc.collect()
 
             st.session_state.archivos_nombres = [f.name for f in archivos_ordenados]
-            st.session_state.t_rel_min = t_rel_min
             st.session_state.h_verde, st.session_state.h_azul = h_verde, h_azul
             st.session_state.g0, st.session_state.a0 = h_verde[0, :], h_azul[0, :]
-            st.session_state.nombres_finales, st.session_state.masas_finales = nombres_muestras, masas_muestras
             st.session_state.num_img = num_img
             st.session_state.procesado = True
+            st.success("Extracción completada. Podés ajustar colores y masas; las gráficas se actualizarán solas.")
 
     # =========================================================================
-    # 5. MATRIZ INTERACTIVA (3 COLUMNAS x 4 FILAS)
+    # 5. MATEMÁTICA Y MATRIZ INTERACTIVA (CÁLCULO AL VUELO)
     # =========================================================================
     if st.session_state.procesado:
         t = st.session_state.t_rel_min
-        lbls = st.session_state.nombres_finales
-        masas = np.array(st.session_state.masas_finales)
         num_img = st.session_state.num_img
         n_r = st.session_state.n_rois_base
 
@@ -226,16 +204,14 @@ if archivos_subidos:
         st.subheader("⏳ 3. Control de Cutoff de Sedimentación")
         t_cutoff = st.slider("Tiempo de corte Cutoff (minutos):", 0.0, float(np.max(t)) if np.max(t) > 0 else 10.0, 2.0, step=0.5)
 
+        # Re-cálculo rápido con los datos almacenados
         g_crudo = st.session_state.h_verde
         a_crudo = st.session_state.h_azul
         r_crudo = np.where(a_crudo == 0, 1e-6, g_crudo / a_crudo)
 
-        g0 = st.session_state.g0
-        a0 = st.session_state.a0
-        r0 = np.where(a0 == 0, 1e-6, g0 / a0)
-
-        g_norm = g_crudo - g0
-        a_norm = a_crudo - a0
+        g_norm = g_crudo - st.session_state.g0
+        a_norm = a_crudo - st.session_state.a0
+        r0 = np.where(st.session_state.a0 == 0, 1e-6, st.session_state.g0 / st.session_state.a0)
         r_norm = r_crudo / r0 
 
         mask_cutoff = t >= t_cutoff
@@ -245,12 +221,12 @@ if archivos_subidos:
         w_cin = w_sg_cin if w_sg_cin <= num_img else (num_img if num_img % 2 != 0 else num_img - 1)
         poly_cin = poly_sg_cin if poly_sg_cin < w_cin else w_cin - 1
 
-        v_gnorm = np.full_like(g_norm, np.nan)
-        v_anorm = np.full_like(a_norm, np.nan)
-        v_rnorm = np.full_like(r_norm, np.nan)
+        v_gnorm, v_anorm, v_rnorm = np.full_like(g_norm, np.nan), np.full_like(a_norm, np.nan), np.full_like(r_norm, np.nan)
+        v_gnorm_m, v_anorm_m, v_rnorm_m = np.full_like(g_norm, np.nan), np.full_like(a_norm, np.nan), np.full_like(r_norm, np.nan)
 
         if len(t_filt) >= w_cin:
             for r in range(n_r):
+                # Derivadas
                 dg = savgol_filter(g_norm[mask_cutoff, r], w_cin, poly_cin, deriv=1, delta=dt_prom)
                 da = savgol_filter(a_norm[mask_cutoff, r], w_cin, poly_cin, deriv=1, delta=dt_prom)
                 dr = savgol_filter(r_norm[mask_cutoff, r], w_cin, poly_cin, deriv=1, delta=dt_prom)
@@ -261,20 +237,25 @@ if archivos_subidos:
                 v_gnorm[mask_cutoff, r] = dg
                 v_anorm[mask_cutoff, r] = da
                 v_rnorm[mask_cutoff, r] = dr
-
-        v_gnorm_m = v_gnorm / masas
-        v_anorm_m = v_anorm / masas
-        v_rnorm_m = v_rnorm / masas
+                
+                # División por masa dinámica (lee el valor actual del UI)
+                masa_actual = st.session_state[f"mass_{r}"]
+                v_gnorm_m[:, r] = v_gnorm[:, r] / masa_actual
+                v_anorm_m[:, r] = v_anorm[:, r] / masa_actual
+                v_rnorm_m[:, r] = v_rnorm[:, r] / masa_actual
 
         def crear_figura_plotly(x_data, y_matrix, titulo, y_label, cutoff_val=None):
             fig = go.Figure()
             for r in range(n_r):
+                # Se asigna el nombre y color de la sesión actual
+                nombre_actual = st.session_state[f"name_{r}"]
+                color_actual = st.session_state[f"color_{r}"]
                 fig.add_trace(go.Scatter(
                     x=x_data, y=y_matrix[:, r], 
                     mode='lines+markers', 
-                    name=lbls[r],
-                    line=dict(width=1.5),
-                    marker=dict(size=4)
+                    name=nombre_actual,
+                    line=dict(width=1.5, color=color_actual),
+                    marker=dict(size=4, color=color_actual)
                 ))
             if cutoff_val is not None:
                 fig.add_vline(x=cutoff_val, line_dash="dash", line_color="red", annotation_text="Cutoff")
@@ -328,80 +309,40 @@ if archivos_subidos:
         with c3: st.plotly_chart(fig_4c, use_container_width=True)
 
         # =========================================================================
-        # EXPORTACIÓN PDF
+        # EXPORTACIÓN HTML
         # =========================================================================
         st.markdown("---")
-        st.subheader("📄 Exportación de Gráficas (PDF)")
+        st.subheader("🌐 5. Exportaciones")
+        
+        # 1. Botón HTML
+        matriz_figuras = [[fig_1a, fig_1b, fig_1c], [fig_2a, fig_2b, fig_2c], [fig_3a, fig_3b, fig_3c], [fig_4a, fig_4b, fig_4c]]
+        html_content = f"""
+        <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+        <title>Reporte Cinético FDA</title>
+        <style>body {{ font-family: Arial; margin: 20px; }} h1 {{ text-align: center; color: #333; }} .row {{ display: flex; width: 100%; }} .col {{ flex: 33.33%; padding: 5px; }}</style>
+        </head><body><h1>📊 Reporte Cinético FDA</h1>
+        """
+        for i, fila in enumerate(matriz_figuras):
+            html_content += '<div class="row">'
+            for fig in fila:
+                html_content += f'<div class="col">{fig.to_html(full_html=False, include_plotlyjs="cdn" if i==0 else False)}</div>'
+            html_content += '</div>'
+        html_content += "</body></html>"
+        
+        st.download_button("📥 Descargar Reporte Interactivo (HTML)", html_content.encode('utf-8'), f"Reporte_FDA_{int(time.time())}.html", "text/html")
 
-        if st.button("Generar y Descargar PDF (A4 Apaisado)"):
-            if not pdf_disponible:
-                st.error("⚠️ Faltan librerías. Asegurate de tener `fpdf2` y `kaleido==0.1.0.post1` en tu requirements.txt.")
-            else:
-                with st.spinner("Construyendo PDF de alta resolución... (puede demorar unos segundos)"):
-                    try:
-                        pdf = FPDF(orientation='L', unit='mm', format='A4')
-                        
-                        matriz_figuras = [
-                            [fig_1a, fig_1b, fig_1c],
-                            [fig_2a, fig_2b, fig_2c],
-                            [fig_3a, fig_3b, fig_3c],
-                            [fig_4a, fig_4b, fig_4c]
-                        ]
-                        
-                        with tempfile.TemporaryDirectory() as tmpdir:
-                            for row_idx, fila_figs in enumerate(matriz_figuras):
-                                if row_idx % 2 == 0:
-                                    pdf.add_page()
-                                
-                                y_base = 15 if row_idx % 2 == 0 else 115
-                                
-                                for col_idx, fig_obj in enumerate(fila_figs):
-                                    img_path = os.path.join(tmpdir, f"plot_{row_idx}_{col_idx}.png")
-                                    # Generación de imagen con protección contra error de Kaleido en Cloud
-                                    fig_obj.write_image(img_path, width=800, height=600, scale=2)
-                                    
-                                    x_base = 10 + (col_idx * 92)
-                                    pdf.image(img_path, x=x_base, y=y_base, w=90)
-                        
-                        pdf_bytes = bytes(pdf.output())
-                        st.download_button(
-                            label="📥 Descargar Documento PDF",
-                            data=pdf_bytes,
-                            file_name=f"Reporte_FDA_{int(time.time())}.pdf",
-                            mime="application/pdf"
-                        )
-                    except Exception as e:
-                        if "chrome" in str(e).lower() or "executable" in str(e).lower():
-                            st.error("🚨 **Error Crítico de Kaleido detectado.**\nPara que la exportación a PDF funcione en Streamlit Cloud, debes cambiar la versión de kaleido en tu `requirements.txt` a exactamente: `kaleido==0.1.0.post1`")
-                        else:
-                            st.error(f"Error inesperado al generar el PDF: {e}")
-
-        # =========================================================================
-        # CONSTRUCCIÓN Y DESCARGA CSV
-        # =========================================================================
-        st.subheader("💾 Exportación de Datos (CSV)")
+        # 2. Botón CSV
         cols = ["Archivo", "Tiempo_Min"]
         for r in range(n_r):
-            cols.extend([
-                f"{lbls[r]}_G_crudo", f"{lbls[r]}_A_crudo", f"{lbls[r]}_R_crudo",
-                f"{lbls[r]}_G-G0", f"{lbls[r]}_A-A0", f"{lbls[r]}_R/R0",
-                f"{lbls[r]}_vG", f"{lbls[r]}_vA", f"{lbls[r]}_v(R/R0)",
-                f"{lbls[r]}_vG_m", f"{lbls[r]}_vA_m", f"{lbls[r]}_v(R/R0)_m",
-                f"{lbls[r]}_Masa_g"
-            ])
+            nm = st.session_state[f"name_{r}"]
+            cols.extend([f"{nm}_G", f"{nm}_A", f"{nm}_R", f"{nm}_G-G0", f"{nm}_A-A0", f"{nm}_R/R0", f"{nm}_vG", f"{nm}_vA", f"{nm}_v(R/R0)", f"{nm}_vG_m", f"{nm}_vA_m", f"{nm}_v(R/R0)_m", f"{nm}_Masa"])
             
         datos = []
         for i_img in range(num_img):
             f = [st.session_state.archivos_nombres[i_img], t[i_img]]
             for r in range(n_r):
-                f.extend([
-                    g_crudo[i_img, r], a_crudo[i_img, r], r_crudo[i_img, r],
-                    g_norm[i_img, r], a_norm[i_img, r], r_norm[i_img, r],
-                    v_gnorm[i_img, r], v_anorm[i_img, r], v_rnorm[i_img, r],
-                    v_gnorm_m[i_img, r], v_anorm_m[i_img, r], v_rnorm_m[i_img, r],
-                    masas[r]
-                ])
+                f.extend([g_crudo[i_img, r], a_crudo[i_img, r], r_crudo[i_img, r], g_norm[i_img, r], a_norm[i_img, r], r_norm[i_img, r], v_gnorm[i_img, r], v_anorm[i_img, r], v_rnorm[i_img, r], v_gnorm_m[i_img, r], v_anorm_m[i_img, r], v_rnorm_m[i_img, r], st.session_state[f"mass_{r}"]])
             datos.append(f)
 
         df_exp = pd.DataFrame(datos, columns=cols)
-        st.download_button("📥 Descargar Tabla Completa (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"fda_matrix_r_r0_{int(time.time())}.csv", "text/csv")
+        st.download_button("📥 Descargar Tabla (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"fda_data_{int(time.time())}.csv", "text/csv")
