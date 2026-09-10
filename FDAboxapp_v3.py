@@ -8,17 +8,26 @@ from datetime import datetime
 import plotly.graph_objects as go
 from scipy.signal import savgol_filter, find_peaks
 
+# Manejo de librerías para PDF
+try:
+    from fpdf import FPDF
+    import tempfile
+    import os
+    pdf_disponible = True
+except ImportError:
+    pdf_disponible = False
+
 # =========================================================================
 # CONFIGURACIÓN E INICIALIZACIÓN
 # =========================================================================
-st.set_page_config(page_title="Análisis FDA v3.4 - Plotly R/R0", layout="wide")
+st.set_page_config(page_title="Análisis FDA v3.5 - Plotly R/R0 + PDF", layout="wide")
 st.title("🔬 Análisis FDA - Matriz 3x4 Interactiva con Ratio R/R₀")
 
 if "procesado" not in st.session_state:
     st.session_state.procesado = False
 
 # =========================================================================
-# CONTROLES DE PARÁMETROS
+# CONTROLES DE PARÁMETROS (BARRA LATERAL)
 # =========================================================================
 st.sidebar.header("⚙️ Configuración del Análisis")
 opcion_rotar = st.sidebar.selectbox("Rotación de Cámara:", ["Sin Rotación", "180 Grados", "90 Grados Horario", "90 Grados Antihorario"])
@@ -56,7 +65,7 @@ if archivos_subidos:
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔄 Rastreo Dinámico de ROIs")
-    freq_roi = st.sidebar.slider("Frec. re-cálculo ROI (cada N fotos):", 1, num_img, num_img)
+    freq_roi = st.sidebar.slider("Frec. re-cálculo ROI (cada N fotos):", 1, num_img, 1)
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📈 Filtros S-G: Cinéticas Temporales")
@@ -64,10 +73,10 @@ if archivos_subidos:
     poly_sg_cin = st.sidebar.slider("Orden Polinomio Derivada:", 1, 5, 2)
 
     # =========================================================================
-    # 2. SEGMENTACIÓN DE ROIS Y DIAGNÓSTICO VISUAL
+    # 2. SEGMENTACIÓN DE ROIS (DIAGNÓSTICO EN BARRA LATERAL)
     # =========================================================================
-    st.markdown("---")
-    st.subheader("📐 2. Diagnóstico Visual")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📐 Diagnóstico Visual de ROIs")
     
     ref_indices = list(range(0, num_img, freq_roi))
     st.session_state.rois_por_ref = {}
@@ -75,68 +84,69 @@ if archivos_subidos:
     w_roi_fijo, h_roi_fijo = 30, 20
     
     try:
-        for idx_panel, i in enumerate(ref_indices):
-            archivo = archivos_ordenados[i]
-            img_bytes = archivo.read()
-            img_bgr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-            archivo.seek(0)
-            if rotacion_seleccionada is not None: img_bgr = cv2.rotate(img_bgr, rotacion_seleccionada)
-            
-            st.session_state.alto_px, st.session_state.ancho_px = img_bgr.shape[:2]
-            canal_azul = img_bgr[:, :, 0]
-            
-            perfil_y = np.mean(canal_azul, axis=1)
-            derivada_y = savgol_filter(perfil_y, window_length=w_sg_y, polyorder=poly_sg, deriv=1)
-            y_min = int(np.argmax(derivada_y))
-            y_max = int(np.argmin(derivada_y[y_min:]) + y_min)
-            y_central = (y_min + y_max) // 2
-            alto_banda = y_max - y_min
+        # Contenedor con scroll vertical en la barra lateral para no ocupar la pantalla principal
+        with st.sidebar.container(height=400):
+            for idx_panel, i in enumerate(ref_indices):
+                archivo = archivos_ordenados[i]
+                img_bytes = archivo.read()
+                img_bgr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+                archivo.seek(0)
+                if rotacion_seleccionada is not None: img_bgr = cv2.rotate(img_bgr, rotacion_seleccionada)
+                
+                st.session_state.alto_px, st.session_state.ancho_px = img_bgr.shape[:2]
+                canal_azul = img_bgr[:, :, 0]
+                
+                perfil_y = np.mean(canal_azul, axis=1)
+                derivada_y = savgol_filter(perfil_y, window_length=w_sg_y, polyorder=poly_sg, deriv=1)
+                y_min = int(np.argmax(derivada_y))
+                y_max = int(np.argmin(derivada_y[y_min:]) + y_min)
+                y_central = (y_min + y_max) // 2
+                alto_banda = y_max - y_min
 
-            franja_azul = canal_azul[y_min:y_max, :]
-            perfil_x = np.mean(franja_azul, axis=0)
-            derivada_x = savgol_filter(perfil_x, window_length=w_sg_x, polyorder=poly_sg, deriv=1)
-            umbral_x = np.max(np.abs(derivada_x)) * 0.15
-            bordes_izq, _ = find_peaks(derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
-            bordes_der, _ = find_peaks(-derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
+                franja_azul = canal_azul[y_min:y_max, :]
+                perfil_x = np.mean(franja_azul, axis=0)
+                derivada_x = savgol_filter(perfil_x, window_length=w_sg_x, polyorder=poly_sg, deriv=1)
+                umbral_x = np.max(np.abs(derivada_x)) * 0.15
+                bordes_izq, _ = find_peaks(derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
+                bordes_der, _ = find_peaks(-derivada_x, height=umbral_x, distance=max(15, st.session_state.ancho_px // 90))
 
-            lista_centros_x = []
-            for b_izq in bordes_izq:
-                b_der_cands = bordes_der[bordes_der > b_izq]
-                if len(b_der_cands) > 0:
-                    b_der = b_der_cands[0]
-                    if int(st.session_state.ancho_px * 0.008) < (b_der - b_izq) < int(st.session_state.ancho_px * 0.08):
-                        lista_centros_x.append((b_izq, b_der, (b_izq + b_der) // 2))
+                lista_centros_x = []
+                for b_izq in bordes_izq:
+                    b_der_cands = bordes_der[bordes_der > b_izq]
+                    if len(b_der_cands) > 0:
+                        b_der = b_der_cands[0]
+                        if int(st.session_state.ancho_px * 0.008) < (b_der - b_izq) < int(st.session_state.ancho_px * 0.08):
+                            lista_centros_x.append((b_izq, b_der, (b_izq + b_der) // 2))
 
-            lista_centros_x.sort(key=lambda x: x[0])
-            
-            if i == 0:
-                n_rois_base = len(lista_centros_x)
-                if n_rois_base > 0:
-                    ancho_min = min([b[1] - b[0] for b in lista_centros_x])
-                    red_px = int(ancho_min * factor_reduccion * 2)
-                    w_roi_fijo, h_roi_fijo = ancho_min - red_px, alto_banda - red_px
-                st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
-            else:
-                if len(lista_centros_x) != n_rois_base:
-                    lista_centros_x, y_central = st.session_state.rois_por_ref[0]
-                st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
+                lista_centros_x.sort(key=lambda x: x[0])
+                
+                if i == 0:
+                    n_rois_base = len(lista_centros_x)
+                    if n_rois_base > 0:
+                        ancho_min = min([b[1] - b[0] for b in lista_centros_x])
+                        red_px = int(ancho_min * factor_reduccion * 2)
+                        w_roi_fijo, h_roi_fijo = ancho_min - red_px, alto_banda - red_px
+                    st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
+                else:
+                    if len(lista_centros_x) != n_rois_base:
+                        lista_centros_x, y_central = st.session_state.rois_por_ref[0]
+                    st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
 
-            # --- DIBUJO DE DIAGNÓSTICO SOBRE LA IMAGEN ---
-            img_disp = img_bgr.copy()
-            cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
-            cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
-            for _, _, cx in lista_centros_x:
-                cv2.rectangle(img_disp, (cx - w_roi_fijo // 2, y_central - h_roi_fijo // 2),
-                              (cx + w_roi_fijo // 2, y_central + h_roi_fijo // 2), (0, 255, 0), 2)
-            
-            st.image(cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB), caption=f"Imagen Ref {i} - {len(lista_centros_x)} ROIs", use_container_width=True)
+                img_disp = img_bgr.copy()
+                cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
+                cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
+                for _, _, cx in lista_centros_x:
+                    cv2.rectangle(img_disp, (cx - w_roi_fijo // 2, y_central - h_roi_fijo // 2),
+                                  (cx + w_roi_fijo // 2, y_central + h_roi_fijo // 2), (0, 255, 0), 2)
+                
+                st.image(cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB), caption=f"Ref {i} - {len(lista_centros_x)} ROIs")
 
-            del img_bgr, canal_azul, franja_azul, img_disp; gc.collect()
+                del img_bgr, canal_azul, franja_azul, img_disp; gc.collect()
             
         st.session_state.w_roi_fijo = w_roi_fijo
         st.session_state.h_roi_fijo = h_roi_fijo
         st.session_state.n_rois_base = n_rois_base
-        st.success(f"Detección correcta: {n_rois_base} ROIs encontrados.")
+        st.sidebar.success(f"{n_rois_base} ROIs detectados.")
 
     except Exception as e:
         st.error(f"Error en segmentación: {e}"); st.stop()
@@ -145,7 +155,7 @@ if archivos_subidos:
     # 3. METADATOS (NOMBRES Y MASAS)
     # =========================================================================
     st.markdown("---")
-    st.subheader("🏷️ 3. Identificación de Muestras y Masa Pesada (g)")
+    st.subheader("🏷️ 2. Identificación de Muestras y Masa Pesada (g)")
     
     nombres_muestras, masas_muestras = [], []
     with st.expander("📝 Formulario de Muestras", expanded=True):
@@ -168,9 +178,7 @@ if archivos_subidos:
         if st.session_state.n_rois_base > 0:
             barra = st.progress(0)
             
-            # --- CÁLCULO DE TIEMPO CON T0 = FOTO 1 ---
             tiempos_dt = [datetime.strptime(f.name.rsplit('.', 1)[0], "%Y-%m-%d_%H-%M-%S") for f in archivos_ordenados]
-            # Si hay más de 1 foto, la foto índice 1 es t=0. Si solo hay 1, es t=0.
             t_ref = tiempos_dt[1] if len(tiempos_dt) > 1 else tiempos_dt[0]
             t_rel_min = np.array([(t - t_ref).total_seconds() / 60.0 for t in tiempos_dt])
 
@@ -216,13 +224,9 @@ if archivos_subidos:
         n_r = st.session_state.n_rois_base
 
         st.markdown("---")
-        st.subheader("⏳ Control de Cutoff de Sedimentación")
-        # El cutoff arranca en 0.0 pero el slider permite hasta el máximo tiempo
+        st.subheader("⏳ 3. Control de Cutoff de Sedimentación")
         t_cutoff = st.slider("Tiempo de corte Cutoff (minutos):", 0.0, float(np.max(t)) if np.max(t) > 0 else 10.0, 2.0, step=0.5)
 
-        # ---------------------------------------------------------------------
-        # MATEMÁTICA ANALÍTICA DE CANALES Y RATIOS (R/R0)
-        # ---------------------------------------------------------------------
         g_crudo = st.session_state.h_verde
         a_crudo = st.session_state.h_azul
         r_crudo = np.where(a_crudo == 0, 1e-6, g_crudo / a_crudo)
@@ -263,7 +267,6 @@ if archivos_subidos:
         v_anorm_m = v_anorm / masas
         v_rnorm_m = v_rnorm / masas
 
-        # --- FUNCIÓN PLOTLY ACTUALIZADA (LÍNEAS FINAS Y CURSOR UNIFICADO) ---
         def crear_figura_plotly(x_data, y_matrix, titulo, y_label, cutoff_val=None):
             fig = go.Figure()
             for r in range(n_r):
@@ -271,8 +274,8 @@ if archivos_subidos:
                     x=x_data, y=y_matrix[:, r], 
                     mode='lines+markers', 
                     name=lbls[r],
-                    line=dict(width=1.5),  # Líneas finas
-                    marker=dict(size=4)    # Puntos discretos
+                    line=dict(width=1.5),
+                    marker=dict(size=4)
                 ))
             if cutoff_val is not None:
                 fig.add_vline(x=cutoff_val, line_dash="dash", line_color="red", annotation_text="Cutoff")
@@ -281,39 +284,97 @@ if archivos_subidos:
                 title=dict(text=titulo, font=dict(size=12)),
                 xaxis_title="Tiempo (min)", yaxis_title=y_label,
                 margin=dict(l=20, r=20, t=35, b=20), height=320,
-                legend=dict(font=dict(size=9), orientation="h", y=-0.25),
-                hovermode="x unified"  # <--- CURSOR VERTICAL QUE MUESTRA TODOS LOS VALORES
+                legend=dict(font=dict(size=14), orientation="h", y=-0.25), # LEYENDA AGRANDADA A SIZE 14
+                hovermode="x unified"
             )
             return fig
 
         st.markdown("---")
-        st.subheader("📊 Panel de Gráficas: Verde | Azul | Ratio (R/R₀)")
+        st.subheader("📊 4. Panel de Gráficas")
+
+        fig_1a = crear_figura_plotly(t, g_crudo, "1A) Verde Crudo (G)", "Intensidad", t_cutoff)
+        fig_1b = crear_figura_plotly(t, a_crudo, "1B) Azul Crudo (A)", "Intensidad", t_cutoff)
+        fig_1c = crear_figura_plotly(t, r_crudo, "1C) Ratio Crudo (G/A)", "Ratio (G/A)", t_cutoff)
+        
+        c1, c2, c3 = st.columns(3)
+        with c1: st.plotly_chart(fig_1a, use_container_width=True)
+        with c2: st.plotly_chart(fig_1b, use_container_width=True)
+        with c3: st.plotly_chart(fig_1c, use_container_width=True)
+
+        fig_2a = crear_figura_plotly(t, g_norm, "2A) Verde Neto (G - G0)", "Δ Intensidad")
+        fig_2b = crear_figura_plotly(t, a_norm, "2B) Azul Neto (A - A0)", "Δ Intensidad")
+        fig_2c = crear_figura_plotly(t, r_norm, "2C) Ratio Normalizado (R / R0)", "Ratio (R/R0)")
 
         c1, c2, c3 = st.columns(3)
-        with c1: st.plotly_chart(crear_figura_plotly(t, g_crudo, "1A) Verde Crudo (G)", "Intensidad", t_cutoff), use_container_width=True)
-        with c2: st.plotly_chart(crear_figura_plotly(t, a_crudo, "1B) Azul Crudo (A)", "Intensidad", t_cutoff), use_container_width=True)
-        with c3: st.plotly_chart(crear_figura_plotly(t, r_crudo, "1C) Ratio Crudo (G/A)", "Ratio (G/A)", t_cutoff), use_container_width=True)
+        with c1: st.plotly_chart(fig_2a, use_container_width=True)
+        with c2: st.plotly_chart(fig_2b, use_container_width=True)
+        with c3: st.plotly_chart(fig_2c, use_container_width=True)
+
+        fig_3a = crear_figura_plotly(t, v_gnorm, "3A) Vel. Verde Neto", "d(G-G0)/dt")
+        fig_3b = crear_figura_plotly(t, v_anorm, "3B) Vel. Azul Neto", "d(A-A0)/dt")
+        fig_3c = crear_figura_plotly(t, v_rnorm, "3C) Vel. Ratio (R/R0)", "d(R/R0)/dt")
 
         c1, c2, c3 = st.columns(3)
-        with c1: st.plotly_chart(crear_figura_plotly(t, g_norm, "2A) Verde Neto (G - G0)", "Δ Intensidad"), use_container_width=True)
-        with c2: st.plotly_chart(crear_figura_plotly(t, a_norm, "2B) Azul Neto (A - A0)", "Δ Intensidad"), use_container_width=True)
-        with c3: st.plotly_chart(crear_figura_plotly(t, r_norm, "2C) Ratio Normalizado (R / R0)", "Ratio (R/R0)"), use_container_width=True)
+        with c1: st.plotly_chart(fig_3a, use_container_width=True)
+        with c2: st.plotly_chart(fig_3b, use_container_width=True)
+        with c3: st.plotly_chart(fig_3c, use_container_width=True)
+
+        fig_4a = crear_figura_plotly(t, v_gnorm_m, "4A) Vel. Verde / Masa", "Unidades / (min·g)")
+        fig_4b = crear_figura_plotly(t, v_anorm_m, "4B) Vel. Azul / Masa", "Unidades / (min·g)")
+        fig_4c = crear_figura_plotly(t, v_rnorm_m, "4C) Vel. Ratio (R/R0) / Masa", "Unidades / (min·g)")
 
         c1, c2, c3 = st.columns(3)
-        with c1: st.plotly_chart(crear_figura_plotly(t, v_gnorm, "3A) Vel. Verde Neto", "d(G-G0)/dt"), use_container_width=True)
-        with c2: st.plotly_chart(crear_figura_plotly(t, v_anorm, "3B) Vel. Azul Neto", "d(A-A0)/dt"), use_container_width=True)
-        with c3: st.plotly_chart(crear_figura_plotly(t, v_rnorm, "3C) Vel. Ratio (R/R0)", "d(R/R0)/dt"), use_container_width=True)
+        with c1: st.plotly_chart(fig_4a, use_container_width=True)
+        with c2: st.plotly_chart(fig_4b, use_container_width=True)
+        with c3: st.plotly_chart(fig_4c, use_container_width=True)
 
-        c1, c2, c3 = st.columns(3)
-        with c1: st.plotly_chart(crear_figura_plotly(t, v_gnorm_m, "4A) Vel. Verde / Masa", "Unidades / (min·g)"), use_container_width=True)
-        with c2: st.plotly_chart(crear_figura_plotly(t, v_anorm_m, "4B) Vel. Azul / Masa", "Unidades / (min·g)"), use_container_width=True)
-        with c3: st.plotly_chart(crear_figura_plotly(t, v_rnorm_m, "4C) Vel. Ratio (R/R0) / Masa", "Unidades / (min·g)"), use_container_width=True)
+        # =========================================================================
+        # EXPORTACIÓN PDF
+        # =========================================================================
+        st.markdown("---")
+        st.subheader("📄 Exportación de Gráficas (PDF)")
+
+        if st.button("Generar y Descargar PDF (A4 Apaisado)"):
+            if not pdf_disponible:
+                st.error("⚠️ Faltan librerías. Asegurate de tener `fpdf2` y `kaleido` en tu requirements.txt.")
+            else:
+                with st.spinner("Construyendo PDF de alta resolución... (puede demorar unos segundos)"):
+                    pdf = FPDF(orientation='L', unit='mm', format='A4')
+                    
+                    matriz_figuras = [
+                        [fig_1a, fig_1b, fig_1c],
+                        [fig_2a, fig_2b, fig_2c],
+                        [fig_3a, fig_3b, fig_3c],
+                        [fig_4a, fig_4b, fig_4c]
+                    ]
+                    
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        for row_idx, fila_figs in enumerate(matriz_figuras):
+                            if row_idx % 2 == 0:
+                                pdf.add_page()
+                            
+                            y_base = 15 if row_idx % 2 == 0 else 115
+                            
+                            for col_idx, fig_obj in enumerate(fila_figs):
+                                img_path = os.path.join(tmpdir, f"plot_{row_idx}_{col_idx}.png")
+                                # Renderizado estático con Kaleido (alta resolución)
+                                fig_obj.write_image(img_path, width=800, height=600, scale=2)
+                                
+                                x_base = 10 + (col_idx * 92)
+                                pdf.image(img_path, x=x_base, y=y_base, w=90)
+                    
+                    pdf_bytes = bytes(pdf.output())
+                    st.download_button(
+                        label="📥 Descargar Documento PDF",
+                        data=pdf_bytes,
+                        file_name=f"Reporte_FDA_{int(time.time())}.pdf",
+                        mime="application/pdf"
+                    )
 
         # =========================================================================
         # CONSTRUCCIÓN Y DESCARGA CSV
         # =========================================================================
-        st.markdown("---")
-        st.subheader("💾 Exportación de Resultados")
+        st.subheader("💾 Exportación de Datos (CSV)")
         cols = ["Archivo", "Tiempo_Min"]
         for r in range(n_r):
             cols.extend([
