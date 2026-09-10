@@ -20,7 +20,7 @@ except ImportError:
 # =========================================================================
 # CONFIGURACIÓN E INICIALIZACIÓN
 # =========================================================================
-st.set_page_config(page_title="Análisis FDA v3.5 - Plotly R/R0 + PDF", layout="wide")
+st.set_page_config(page_title="Análisis FDA v3.6 - Fix Plotly/PDF", layout="wide")
 st.title("🔬 Análisis FDA - Matriz 3x4 Interactiva con Ratio R/R₀")
 
 if "procesado" not in st.session_state:
@@ -76,7 +76,6 @@ if archivos_subidos:
     # 2. SEGMENTACIÓN DE ROIS (DIAGNÓSTICO EN BARRA LATERAL)
     # =========================================================================
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📐 Diagnóstico Visual de ROIs")
     
     ref_indices = list(range(0, num_img, freq_roi))
     st.session_state.rois_por_ref = {}
@@ -84,8 +83,8 @@ if archivos_subidos:
     w_roi_fijo, h_roi_fijo = 30, 20
     
     try:
-        # Contenedor con scroll vertical en la barra lateral para no ocupar la pantalla principal
-        with st.sidebar.container(height=400):
+        # Reemplazamos el contenedor restrictivo por un expansor adaptativo
+        with st.sidebar.expander("🖼️ Diagnóstico Visual (ROIs)", expanded=True):
             for idx_panel, i in enumerate(ref_indices):
                 archivo = archivos_ordenados[i]
                 img_bytes = archivo.read()
@@ -284,7 +283,7 @@ if archivos_subidos:
                 title=dict(text=titulo, font=dict(size=12)),
                 xaxis_title="Tiempo (min)", yaxis_title=y_label,
                 margin=dict(l=20, r=20, t=35, b=20), height=320,
-                legend=dict(font=dict(size=14), orientation="h", y=-0.25), # LEYENDA AGRANDADA A SIZE 14
+                legend=dict(font=dict(size=14), orientation="h", y=-0.25),
                 hovermode="x unified"
             )
             return fig
@@ -336,40 +335,46 @@ if archivos_subidos:
 
         if st.button("Generar y Descargar PDF (A4 Apaisado)"):
             if not pdf_disponible:
-                st.error("⚠️ Faltan librerías. Asegurate de tener `fpdf2` y `kaleido` en tu requirements.txt.")
+                st.error("⚠️ Faltan librerías. Asegurate de tener `fpdf2` y `kaleido==0.1.0.post1` en tu requirements.txt.")
             else:
                 with st.spinner("Construyendo PDF de alta resolución... (puede demorar unos segundos)"):
-                    pdf = FPDF(orientation='L', unit='mm', format='A4')
-                    
-                    matriz_figuras = [
-                        [fig_1a, fig_1b, fig_1c],
-                        [fig_2a, fig_2b, fig_2c],
-                        [fig_3a, fig_3b, fig_3c],
-                        [fig_4a, fig_4b, fig_4c]
-                    ]
-                    
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        for row_idx, fila_figs in enumerate(matriz_figuras):
-                            if row_idx % 2 == 0:
-                                pdf.add_page()
-                            
-                            y_base = 15 if row_idx % 2 == 0 else 115
-                            
-                            for col_idx, fig_obj in enumerate(fila_figs):
-                                img_path = os.path.join(tmpdir, f"plot_{row_idx}_{col_idx}.png")
-                                # Renderizado estático con Kaleido (alta resolución)
-                                fig_obj.write_image(img_path, width=800, height=600, scale=2)
+                    try:
+                        pdf = FPDF(orientation='L', unit='mm', format='A4')
+                        
+                        matriz_figuras = [
+                            [fig_1a, fig_1b, fig_1c],
+                            [fig_2a, fig_2b, fig_2c],
+                            [fig_3a, fig_3b, fig_3c],
+                            [fig_4a, fig_4b, fig_4c]
+                        ]
+                        
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            for row_idx, fila_figs in enumerate(matriz_figuras):
+                                if row_idx % 2 == 0:
+                                    pdf.add_page()
                                 
-                                x_base = 10 + (col_idx * 92)
-                                pdf.image(img_path, x=x_base, y=y_base, w=90)
-                    
-                    pdf_bytes = bytes(pdf.output())
-                    st.download_button(
-                        label="📥 Descargar Documento PDF",
-                        data=pdf_bytes,
-                        file_name=f"Reporte_FDA_{int(time.time())}.pdf",
-                        mime="application/pdf"
-                    )
+                                y_base = 15 if row_idx % 2 == 0 else 115
+                                
+                                for col_idx, fig_obj in enumerate(fila_figs):
+                                    img_path = os.path.join(tmpdir, f"plot_{row_idx}_{col_idx}.png")
+                                    # Generación de imagen con protección contra error de Kaleido en Cloud
+                                    fig_obj.write_image(img_path, width=800, height=600, scale=2)
+                                    
+                                    x_base = 10 + (col_idx * 92)
+                                    pdf.image(img_path, x=x_base, y=y_base, w=90)
+                        
+                        pdf_bytes = bytes(pdf.output())
+                        st.download_button(
+                            label="📥 Descargar Documento PDF",
+                            data=pdf_bytes,
+                            file_name=f"Reporte_FDA_{int(time.time())}.pdf",
+                            mime="application/pdf"
+                        )
+                    except Exception as e:
+                        if "chrome" in str(e).lower() or "executable" in str(e).lower():
+                            st.error("🚨 **Error Crítico de Kaleido detectado.**\nPara que la exportación a PDF funcione en Streamlit Cloud, debes cambiar la versión de kaleido en tu `requirements.txt` a exactamente: `kaleido==0.1.0.post1`")
+                        else:
+                            st.error(f"Error inesperado al generar el PDF: {e}")
 
         # =========================================================================
         # CONSTRUCCIÓN Y DESCARGA CSV
