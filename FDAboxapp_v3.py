@@ -11,7 +11,7 @@ from scipy.signal import savgol_filter, find_peaks
 # =========================================================================
 # CONFIGURACIÓN E INICIALIZACIÓN
 # =========================================================================
-st.set_page_config(page_title="Análisis FDA v3.3 - Plotly R/R0", layout="wide")
+st.set_page_config(page_title="Análisis FDA v3.4 - Plotly R/R0", layout="wide")
 st.title("🔬 Análisis FDA - Matriz 3x4 Interactiva con Ratio R/R₀")
 
 if "procesado" not in st.session_state:
@@ -47,7 +47,8 @@ factor_reduccion = st.sidebar.slider("Factor reducción ROI:", 0.0, 0.45, 0.20, 
 # 1. CARGA DE IMÁGENES
 # =========================================================================
 st.subheader("🗂️ 1. Carga de Imágenes Secuenciales")
-archivos_subidos = st.file_uploader("Arrastrá tus fotos aquí (La primera debe ser t=0)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+st.info("La **Foto 0** será el blanco (t < 0). La **Foto 1** será el inicio de la reacción (t = 0).")
+archivos_subidos = st.file_uploader("Arrastrá tus fotos aquí", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if archivos_subidos:
     archivos_ordenados = sorted(archivos_subidos, key=lambda x: x.name)
@@ -63,7 +64,7 @@ if archivos_subidos:
     poly_sg_cin = st.sidebar.slider("Orden Polinomio Derivada:", 1, 5, 2)
 
     # =========================================================================
-    # 2. SEGMENTACIÓN DE ROIS (MATEMÁTICA V3)
+    # 2. SEGMENTACIÓN DE ROIS Y DIAGNÓSTICO VISUAL
     # =========================================================================
     st.markdown("---")
     st.subheader("📐 2. Diagnóstico Visual")
@@ -120,7 +121,17 @@ if archivos_subidos:
                     lista_centros_x, y_central = st.session_state.rois_por_ref[0]
                 st.session_state.rois_por_ref[i] = (lista_centros_x, y_central)
 
-            del img_bgr, canal_azul, franja_azul; gc.collect()
+            # --- DIBUJO DE DIAGNÓSTICO SOBRE LA IMAGEN ---
+            img_disp = img_bgr.copy()
+            cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
+            cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
+            for _, _, cx in lista_centros_x:
+                cv2.rectangle(img_disp, (cx - w_roi_fijo // 2, y_central - h_roi_fijo // 2),
+                              (cx + w_roi_fijo // 2, y_central + h_roi_fijo // 2), (0, 255, 0), 2)
+            
+            st.image(cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB), caption=f"Imagen Ref {i} - {len(lista_centros_x)} ROIs", use_container_width=True)
+
+            del img_bgr, canal_azul, franja_azul, img_disp; gc.collect()
             
         st.session_state.w_roi_fijo = w_roi_fijo
         st.session_state.h_roi_fijo = h_roi_fijo
@@ -150,15 +161,18 @@ if archivos_subidos:
             nombres_muestras.append(val_name); masas_muestras.append(val_mass)
 
     # =========================================================================
-    # 4. EXTRACCIÓN DE SEÑALES
+    # 4. EXTRACCIÓN DE SEÑALES Y EJE TEMPORAL
     # =========================================================================
     st.markdown("---")
     if st.button("▶️ Lanzar Procesamiento de Lote"):
         if st.session_state.n_rois_base > 0:
             barra = st.progress(0)
+            
+            # --- CÁLCULO DE TIEMPO CON T0 = FOTO 1 ---
             tiempos_dt = [datetime.strptime(f.name.rsplit('.', 1)[0], "%Y-%m-%d_%H-%M-%S") for f in archivos_ordenados]
-            t0 = min(tiempos_dt)
-            t_rel_min = np.array([(t - t0).total_seconds() / 60.0 for t in tiempos_dt])
+            # Si hay más de 1 foto, la foto índice 1 es t=0. Si solo hay 1, es t=0.
+            t_ref = tiempos_dt[1] if len(tiempos_dt) > 1 else tiempos_dt[0]
+            t_rel_min = np.array([(t - t_ref).total_seconds() / 60.0 for t in tiempos_dt])
 
             n_r = st.session_state.n_rois_base
             h_verde, h_azul = np.zeros((num_img, n_r)), np.zeros((num_img, n_r))
@@ -203,27 +217,24 @@ if archivos_subidos:
 
         st.markdown("---")
         st.subheader("⏳ Control de Cutoff de Sedimentación")
-        t_cutoff = st.slider("Tiempo de corte Cutoff (minutos):", 0.0, float(np.max(t)), 2.0, step=0.5)
+        # El cutoff arranca en 0.0 pero el slider permite hasta el máximo tiempo
+        t_cutoff = st.slider("Tiempo de corte Cutoff (minutos):", 0.0, float(np.max(t)) if np.max(t) > 0 else 10.0, 2.0, step=0.5)
 
         # ---------------------------------------------------------------------
         # MATEMÁTICA ANALÍTICA DE CANALES Y RATIOS (R/R0)
         # ---------------------------------------------------------------------
-        # Fila 1: Valores Crudos
         g_crudo = st.session_state.h_verde
         a_crudo = st.session_state.h_azul
         r_crudo = np.where(a_crudo == 0, 1e-6, g_crudo / a_crudo)
 
-        # Basales t=0
         g0 = st.session_state.g0
         a0 = st.session_state.a0
         r0 = np.where(a0 == 0, 1e-6, g0 / a0)
 
-        # Fila 2: Netos / Normalizados
         g_norm = g_crudo - g0
         a_norm = a_crudo - a0
-        r_norm = r_crudo / r0  # R / R0
+        r_norm = r_crudo / r0 
 
-        # Filtro Temporal S-G por Cutoff
         mask_cutoff = t >= t_cutoff
         t_filt = t[mask_cutoff]
         dt_prom = np.mean(np.diff(t)) if len(t) > 1 else 1.0
@@ -231,7 +242,6 @@ if archivos_subidos:
         w_cin = w_sg_cin if w_sg_cin <= num_img else (num_img if num_img % 2 != 0 else num_img - 1)
         poly_cin = poly_sg_cin if poly_sg_cin < w_cin else w_cin - 1
 
-        # Fila 3: Velocidades (> Cutoff)
         v_gnorm = np.full_like(g_norm, np.nan)
         v_anorm = np.full_like(a_norm, np.nan)
         v_rnorm = np.full_like(r_norm, np.nan)
@@ -249,48 +259,51 @@ if archivos_subidos:
                 v_anorm[mask_cutoff, r] = da
                 v_rnorm[mask_cutoff, r] = dr
 
-        # Fila 4: Velocidades / Masa
         v_gnorm_m = v_gnorm / masas
         v_anorm_m = v_anorm / masas
         v_rnorm_m = v_rnorm / masas
 
-        # Generador dinámico de figuras Plotly
+        # --- FUNCIÓN PLOTLY ACTUALIZADA (LÍNEAS FINAS Y CURSOR UNIFICADO) ---
         def crear_figura_plotly(x_data, y_matrix, titulo, y_label, cutoff_val=None):
             fig = go.Figure()
             for r in range(n_r):
-                fig.add_trace(go.Scatter(x=x_data, y=y_matrix[:, r], mode='lines+markers', name=lbls[r]))
+                fig.add_trace(go.Scatter(
+                    x=x_data, y=y_matrix[:, r], 
+                    mode='lines+markers', 
+                    name=lbls[r],
+                    line=dict(width=1.5),  # Líneas finas
+                    marker=dict(size=4)    # Puntos discretos
+                ))
             if cutoff_val is not None:
-                fig.add_vline(x=cutoff_val, line_dash="dash", line_color="red", annotation_text=f"Cutoff {cutoff_val}m")
+                fig.add_vline(x=cutoff_val, line_dash="dash", line_color="red", annotation_text="Cutoff")
+            
             fig.update_layout(
                 title=dict(text=titulo, font=dict(size=12)),
                 xaxis_title="Tiempo (min)", yaxis_title=y_label,
                 margin=dict(l=20, r=20, t=35, b=20), height=320,
-                legend=dict(font=dict(size=9), orientation="h", y=-0.25)
+                legend=dict(font=dict(size=9), orientation="h", y=-0.25),
+                hovermode="x unified"  # <--- CURSOR VERTICAL QUE MUESTRA TODOS LOS VALORES
             )
             return fig
 
         st.markdown("---")
         st.subheader("📊 Panel de Gráficas: Verde | Azul | Ratio (R/R₀)")
 
-        # FILA 1: CRUDOS
         c1, c2, c3 = st.columns(3)
         with c1: st.plotly_chart(crear_figura_plotly(t, g_crudo, "1A) Verde Crudo (G)", "Intensidad", t_cutoff), use_container_width=True)
         with c2: st.plotly_chart(crear_figura_plotly(t, a_crudo, "1B) Azul Crudo (A)", "Intensidad", t_cutoff), use_container_width=True)
         with c3: st.plotly_chart(crear_figura_plotly(t, r_crudo, "1C) Ratio Crudo (G/A)", "Ratio (G/A)", t_cutoff), use_container_width=True)
 
-        # FILA 2: NETOS / NORMALIZADOS
         c1, c2, c3 = st.columns(3)
         with c1: st.plotly_chart(crear_figura_plotly(t, g_norm, "2A) Verde Neto (G - G0)", "Δ Intensidad"), use_container_width=True)
         with c2: st.plotly_chart(crear_figura_plotly(t, a_norm, "2B) Azul Neto (A - A0)", "Δ Intensidad"), use_container_width=True)
         with c3: st.plotly_chart(crear_figura_plotly(t, r_norm, "2C) Ratio Normalizado (R / R0)", "Ratio (R/R0)"), use_container_width=True)
 
-        # FILA 3: VELOCIDADES
         c1, c2, c3 = st.columns(3)
         with c1: st.plotly_chart(crear_figura_plotly(t, v_gnorm, "3A) Vel. Verde Neto", "d(G-G0)/dt"), use_container_width=True)
         with c2: st.plotly_chart(crear_figura_plotly(t, v_anorm, "3B) Vel. Azul Neto", "d(A-A0)/dt"), use_container_width=True)
         with c3: st.plotly_chart(crear_figura_plotly(t, v_rnorm, "3C) Vel. Ratio (R/R0)", "d(R/R0)/dt"), use_container_width=True)
 
-        # FILA 4: VELOCIDADES / MASA
         c1, c2, c3 = st.columns(3)
         with c1: st.plotly_chart(crear_figura_plotly(t, v_gnorm_m, "4A) Vel. Verde / Masa", "Unidades / (min·g)"), use_container_width=True)
         with c2: st.plotly_chart(crear_figura_plotly(t, v_anorm_m, "4B) Vel. Azul / Masa", "Unidades / (min·g)"), use_container_width=True)
@@ -326,4 +339,3 @@ if archivos_subidos:
 
         df_exp = pd.DataFrame(datos, columns=cols)
         st.download_button("📥 Descargar Tabla Completa (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"fda_matrix_r_r0_{int(time.time())}.csv", "text/csv")
-        st.dataframe(df_exp.head(10).style.format(precision=4, na_rep='NaN'), use_container_width=True)
