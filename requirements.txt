@@ -5,3 +5,5 @@ pandas
 matplotlib
 scipy
 plotly
+kaleido
+fpdf2
