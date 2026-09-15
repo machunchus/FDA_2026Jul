@@ -333,39 +333,15 @@ if archivos_subidos:
         st.markdown("---")
         st.subheader("🌐 5. Exportaciones")
         
-        matriz_figuras = [[fig_1a, fig_1b, fig_1c], [fig_2a, fig_2b, fig_2c], [fig_3a, fig_3b, fig_3c], [fig_4a, fig_4b, fig_4c]]
-        html_content = f"""
+        matriz_figuras = [
+            [fig_1a, fig_1b, fig_1c], 
+            [fig_2a, fig_2b, fig_2c], 
+            [fig_3a, fig_3b, fig_3c], 
+            [fig_4a, fig_4b, fig_4c]
+        ]
         
-        Reporte Cinético FDA
-        """
-        for i, fila in enumerate(matriz_figuras):
-        html_content += '
-        
-        '
-        for fig in fila:
-        html_content += f'
-        
-        {fig.to_html(full_html=False, include_plotlyjs="cdn" if i==0 else False)}
-        
-        '
-        html_content += '
-        
-        '
-        html_content += ""
-        
-            st.download_button("📥 Descargar Reporte Interactivo (HTML)", html_content.encode('utf-8'), f"Reporte_FDA_{int(time.time())}.html", "text/html")
-        
-            cols = ["Archivo", "Tiempo_Min"]
-            for r in range(n_r):
-                nm = st.session_state[f"name_{r}"]
-                cols.extend([f"{nm}_G", f"{nm}_A", f"{nm}_R", f"{nm}_G-G0", f"{nm}_A-A0", f"{nm}_R/R0", f"{nm}_vG", f"{nm}_vA", f"{nm}_v(R/R0)", f"{nm}_vG_m", f"{nm}_vA_m", f"{nm}_v(R/R0)_m", f"{nm}_Masa"])
-                
-            datos = []
-            for i_img in range(num_img):
-                f = [st.session_state.archivos_nombres[i_img], t[i_img]]
-                for r in range(n_r):
-                    f.extend([g_crudo[i_img, r], a_crudo[i_img, r], r_crudo[i_img, r], g_norm[i_img, r], a_norm[i_img, r], r_norm[i_img, r], v_gnorm[i_img, r], v_anorm[i_img, r], v_rnorm[i_img, r], v_gnorm_m[i_img, r], v_anorm_m[i_img, r], v_rnorm_m[i_img, r], st.session_state[f"mass_{r}"]])
-                datos.append(f)
-        
-            df_exp = pd.DataFrame(datos, columns=cols)
-            st.download_button("📥 Descargar Tabla (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"fda_data_{int(time.time())}.csv", "text/csv")
+        html_content = """
+
+
+    
+    Reporte Cinético FDA
