@@ -340,63 +340,60 @@ if archivos_subidos:
             [fig_4a, fig_4b, fig_4c]
         ]
         
+        # Usamos \x3c y \x3e (que en Python son < y >) para evitar bugs visuales.
         html_cabecera = [
-            "",
-            "",
-            "",
-            "    ",
-            "    Reporte Cinético FDA",
-            "    ",
-            "",
-            "",
-            "    
-            📊 Reporte Cinético FDA - Matriz 3x4
-            "
-            ]
-            
-                html_content = "\n".join(html_cabecera) + "\n"
-                
-                for i, fila in enumerate(matriz_figuras):
-                    html_content += "
-            \n"
+            "\x3c!DOCTYPE html\x3e",
+            "\x3chtml lang='es'\x3e",
+            "\x3chead\x3e",
+            "    \x3cmeta charset='UTF-8'\x3e",
+            "    \x3ctitle\x3eReporte Cinético FDA\x3c/title\x3e",
+            "    \x3cstyle\x3e",
+            "        body { font-family: Arial, sans-serif; margin: 20px; }",
+            "        h1 { text-align: center; color: #333; }",
+            "        .row { display: flex; width: 100%; margin-bottom: 20px; }",
+            "        .col { flex: 33.33%; padding: 5px; box-sizing: border-box; }",
+            "    \x3c/style\x3e",
+            "\x3c/head\x3e",
+            "\x3cbody\x3e",
+            "    \x3ch1\x3e📊 Reporte Cinético FDA - Matriz 3x4\x3c/h1\x3e"
+        ]
+        
+        html_content = "\n".join(html_cabecera) + "\n"
+        
+        for i, fila in enumerate(matriz_figuras):
+            html_content += "\x3cdiv class='row'\x3e\n"
             for fig in fila:
-            use_cdn = "cdn" if i == 0 else False
-            fig_html = fig.to_html(full_html=False, include_plotlyjs=use_cdn)
-            html_content += f"
+                use_cdn = "cdn" if i == 0 else False
+                fig_html = fig.to_html(full_html=False, include_plotlyjs=use_cdn)
+                html_content += f"\x3cdiv class='col'\x3e{fig_html}\x3c/div\x3e\n"
+            html_content += "\x3c/div\x3e\n"
             
-            {fig_html}
+        html_content += "\x3c/body\x3e\n\x3c/html\x3e\n"
+        
+        st.download_button(
+            "📥 Descargar Reporte Interactivo (HTML)", 
+            html_content.encode('utf-8'), 
+            f"Reporte_FDA_{int(time.time())}.html", 
+            "text/html"
+        )
+
+        cols = ["Archivo", "Tiempo_Min"]
+        for r in range(n_r):
+            nm = st.session_state[f"name_{r}"]
+            cols.extend([f"{nm}_G", f"{nm}_A", f"{nm}_R", f"{nm}_G-G0", f"{nm}_A-A0", f"{nm}_R/R0", f"{nm}_vG", f"{nm}_vA", f"{nm}_v(R/R0)", f"{nm}_vG_m", f"{nm}_vA_m", f"{nm}_v(R/R0)_m", f"{nm}_Masa"])
             
-            \n"
-            html_content += "
-            
-            \n"
-            
-                html_content += "\n\n"
-                
-                st.download_button(
-                    "📥 Descargar Reporte Interactivo (HTML)", 
-                    html_content.encode('utf-8'), 
-                    f"Reporte_FDA_{int(time.time())}.html", 
-                    "text/html"
-                )
-            
-                cols = ["Archivo", "Tiempo_Min"]
-                for r in range(n_r):
-                    nm = st.session_state[f"name_{r}"]
-                    cols.extend([f"{nm}_G", f"{nm}_A", f"{nm}_R", f"{nm}_G-G0", f"{nm}_A-A0", f"{nm}_R/R0", f"{nm}_vG", f"{nm}_vA", f"{nm}_v(R/R0)", f"{nm}_vG_m", f"{nm}_vA_m", f"{nm}_v(R/R0)_m", f"{nm}_Masa"])
-                    
-                datos = []
-                for i_img in range(num_img):
-                    f = [st.session_state.archivos_nombres[i_img], t[i_img]]
-                    for r in range(n_r):
-                        f.extend([
-                            g_crudo[i_img, r], a_crudo[i_img, r], r_crudo[i_img, r], 
-                            g_norm[i_img, r], a_norm[i_img, r], r_norm[i_img, r], 
-                            v_gnorm[i_img, r], v_anorm[i_img, r], v_rnorm[i_img, r], 
-                            v_gnorm_m[i_img, r], v_anorm_m[i_img, r], v_rnorm_m[i_img, r], 
-                            st.session_state[f"mass_{r}"]
-                        ])
-                    datos.append(f)
-            
-                df_exp = pd.DataFrame(datos, columns=cols)
-                st.download_button("📥 Descargar Tabla (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"fda_data_{int(time.time())}.csv", "text/csv")
+        datos = []
+        for i_img in range(num_img):
+            f = [st.session_state.archivos_nombres[i_img], t[i_img]]
+            for r in range(n_r):
+                f.extend([
+                    g_crudo[i_img, r], a_crudo[i_img, r], r_crudo[i_img, r], 
+                    g_norm[i_img, r], a_norm[i_img, r], r_norm[i_img, r], 
+                    v_gnorm[i_img, r], v_anorm[i_img, r], v_rnorm[i_img, r], 
+                    v_gnorm_m[i_img, r], v_anorm_m[i_img, r], v_rnorm_m[i_img, r], 
+                    st.session_state[f"mass_{r}"]
+                ])
+            datos.append(f)
+
+        df_exp = pd.DataFrame(datos, columns=cols)
+        st.download_button("📥 Descargar Tabla (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"fda_data_{int(time.time())}.csv", "text/csv")
