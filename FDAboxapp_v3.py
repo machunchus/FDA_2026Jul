@@ -25,6 +25,8 @@ def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg
     """
     Decodifica imágenes y calcula las coordenadas de ROIs solo cuando
     cambian los parámetros espaciales o las imágenes cargadas.
+    Retorna: rois_por_ref, imagenes_preview, n_rois_base, w_roi_fijo, h_roi_fijo, 
+             ancho_px, alto_px, diagnosticos (lista de warnings/infos)
     """
     dict_rotacion = {
         "Sin Rotación ": None,
@@ -40,6 +42,7 @@ def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg
     imagenes_preview = []
     n_rois_base = 0
     w_roi_fijo, h_roi_fijo = 30, 20
+    diagnosticos = []  # Lista para almacenar mensajes de diagnóstico
     
     # Obtener dimensiones base con la primera imagen
     bytes_0 = archivos_ordenados[0].getvalue()
@@ -55,8 +58,8 @@ def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg
     if w_sg_x % 2 == 0: 
         w_sg_x += 1
     
-    # VALIDACIÓN: Mostrar dimensiones calculadas
-    st.sidebar.info(f"📐 Imagen: {ancho_px}x{alto_px}px | S-G Y: {w_sg_y} | S-G X: {w_sg_x}")
+    # INFO: Dimensiones calculadas (la retornamos para mostrar fuera)
+    diagnosticos.append(("info", f"📐 Imagen: {ancho_px}x{alto_px}px | S-G Y: {w_sg_y} | S-G X: {w_sg_x}"))
     
     for i in ref_indices:
         archivo = archivos_ordenados[i]
@@ -92,12 +95,12 @@ def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg
         lista_centros_x.sort(key=lambda x: x[0])
         
         # =========================================================================
-        # VALIDACIONES DEFENSIVAS AGREGADAS
+        # VALIDACIONES DEFENSIVAS (almacenamos mensajes, no los mostramos acá)
         # =========================================================================
         
         # VALIDACIÓN 1: Bordes desbalanceados
         if len(bordes_izq) != len(bordes_der):
-            st.warning(f"⚠️ Imagen Ref {i}: Bordes desbalanceados ({len(bordes_izq)} izq vs {len(bordes_der)} der)")
+            diagnosticos.append(("warning", f"️ Imagen Ref {i}: Bordes desbalanceados ({len(bordes_izq)} izq vs {len(bordes_der)} der)"))
         
         # VALIDACIÓN 2: Verificar anchos de ROI individuales
         anchos_sospechosos = []
@@ -107,23 +110,23 @@ def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg
                 anchos_sospechosos.append(ancho_roi)
         
         if anchos_sospechosos:
-            st.warning(f"️ Imagen Ref {i}: {len(anchos_sospechosos)} ROI(s) con ancho fuera de rango esperado")
+            diagnosticos.append(("warning", f"⚠️ Imagen Ref {i}: {len(anchos_sospechosos)} ROI(s) con ancho fuera de rango esperado"))
         
         # VALIDACIÓN 3: Verificar consistencia con primera imagen
         if i == 0:
             n_rois_base = len(lista_centros_x)
             if n_rois_base == 0:
-                st.error("❌ No se detectaron ROIs en la primera imagen. Verificar parámetros.")
+                diagnosticos.append(("error", " No se detectaron ROIs en la primera imagen. Verificar parámetros."))
             elif n_rois_base > 0:
                 ancho_min = min([b[1] - b[0] for b in lista_centros_x])
                 red_px = int(ancho_min * factor_reduccion * 2)
                 w_roi_fijo, h_roi_fijo = ancho_min - red_px, alto_banda - red_px
-                st.success(f"✅ Primera imagen: {n_rois_base} ROIs detectados | Tamaño ROI: {w_roi_fijo}x{h_roi_fijo}px")
+                diagnosticos.append(("success", f"✅ Primera imagen: {n_rois_base} ROIs detectados | Tamaño ROI: {w_roi_fijo}x{h_roi_fijo}px"))
             rois_por_ref[i] = (lista_centros_x, y_central)
         else:
             # VALIDACIÓN 4: Alertar si el número de ROIs cambia
             if len(lista_centros_x) != n_rois_base:
-                st.warning(f"⚠️ Imagen Ref {i}: Se detectaron {len(lista_centros_x)} ROIs en lugar de {n_rois_base}. Usando ROIs de referencia.")
+                diagnosticos.append(("warning", f"⚠️ Imagen Ref {i}: Se detectaron {len(lista_centros_x)} ROIs en lugar de {n_rois_base}. Usando ROIs de referencia."))
                 lista_centros_x, y_central = rois_por_ref[0]
             rois_por_ref[i] = (lista_centros_x, y_central)
         
@@ -137,7 +140,7 @@ def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg
         img_rgb = cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB)
         imagenes_preview.append((f"Ref {i} ({len(lista_centros_x)} ROIs)", img_rgb))
     
-    return rois_por_ref, imagenes_preview, n_rois_base, w_roi_fijo, h_roi_fijo, ancho_px, alto_px
+    return rois_por_ref, imagenes_preview, n_rois_base, w_roi_fijo, h_roi_fijo, ancho_px, alto_px, diagnosticos
 
 # =========================================================================
 # CONTROLES DE PARÁMETROS (BARRA LATERAL)
@@ -146,7 +149,7 @@ st.sidebar.header("️ Configuración Espacial")
 opcion_rotar = st.sidebar.selectbox("Rotación de Cámara: ", ["Sin Rotación ", "180 Grados ", "90 Grados Horario ", "90 Grados Antihorario "])
 metodo_estadistico = st.sidebar.radio("Cálculo de Intensidad: ", ["Mediana ", "Promedio "], index=0)
 st.sidebar.markdown("---")
-st.sidebar.subheader("📐 Filtros S-G: Detección Espacial")
+st.sidebar.subheader(" Filtros S-G: Detección Espacial")
 prop_sg_y = st.sidebar.slider("Ventana S-G Y (%):", 0.5, 15.0, 1.5, step=0.1)
 prop_sg_x = st.sidebar.slider("Ventana S-G X (%):", 0.1, 10.0, 0.5, step=0.1)
 poly_sg = st.sidebar.slider("Orden Polinomio Detección:", 2, 5, 4)
@@ -186,9 +189,25 @@ if archivos_subidos:
     # =========================================================================
     # 2. DETECCIÓN Y DIAGNÓSTICO VISUAL (EJECUCIÓN CACHEADA)
     # =========================================================================
-    rois_por_ref, imagenes_preview, n_rois_base, w_roi_fijo, h_roi_fijo, ancho_px, alto_px = procesar_diagnostico_rois(
+    rois_por_ref, imagenes_preview, n_rois_base, w_roi_fijo, h_roi_fijo, ancho_px, alto_px, diagnosticos = procesar_diagnostico_rois(
         archivos_subidos, opcion_rotar, prop_sg_y, prop_sg_x, poly_sg, factor_reduccion, freq_roi
     )
+    
+    # =========================================================================
+    # MOSTRAR DIAGNÓSTICOS (FUERA de la función cacheada)
+    # =========================================================================
+    if diagnosticos:
+        st.markdown("---")
+        st.subheader("🔍 Diagnóstico de Detección")
+        for tipo, mensaje in diagnosticos:
+            if tipo == "info":
+                st.info(mensaje)
+            elif tipo == "warning":
+                st.warning(mensaje)
+            elif tipo == "error":
+                st.error(mensaje)
+            elif tipo == "success":
+                st.success(mensaje)
     
     # VALIDACIÓN 6: Verificar que se detectaron ROIs
     if n_rois_base == 0:
@@ -274,7 +293,7 @@ if archivos_subidos:
             
             # VALIDACIÓN 10: Reportar problemas encontrados
             if ceros_azul > 0:
-                st.warning(f"⚠️ Se encontraron {ceros_azul} valores de Azul=0 durante la extracción. Se manejarán como NaN en el ratio.")
+                st.warning(f"️ Se encontraron {ceros_azul} valores de Azul=0 durante la extracción. Se manejarán como NaN en el ratio.")
             if valores_invalidos > 0:
                 st.warning(f"⚠️ Se encontraron {valores_invalidos} ROIs inválidos (fuera de imagen).")
             
