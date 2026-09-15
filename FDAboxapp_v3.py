@@ -20,7 +20,7 @@ if "procesado" not in st.session_state:
 # =========================================================================
 # FUNCIONES CACHEADAS (EVITAN RE-PROCESAR IMÁGENES)
 # =========================================================================
-@st.cache_data(show_spinner="Procesando detección espacial de ROIs...")
+@st.cache_resource(show_spinner="Procesando detección espacial de ROIs...")
 def procesar_diagnostico_rois(archivos_subidos, opcion_rotar, prop_sg_y, prop_sg_x, poly_sg, factor_reduccion, freq_roi):
     """
     Decodifica imágenes y calcula las coordenadas de ROIs solo cuando
