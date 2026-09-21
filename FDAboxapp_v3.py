@@ -74,6 +74,7 @@ if archivos_subidos:
     for idx_panel, i in enumerate(ref_indices):
         with columnas_img[idx_panel % len(columnas_img)]:
             archivo = archivos_ordenados[i]
+            archivo.seek(0)
             img_bytes = archivo.read()
             img_bgr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
             archivo.seek(0)
@@ -171,7 +172,7 @@ if archivos_subidos:
                 ref_idx = (idx // freq_roi) * freq_roi
                 centros_tuplas, y_cent_actual = st.session_state.rois_por_ref[ref_idx]
                 centros_x_act = [b[2] for b in centros_tuplas]
-                
+                archivo.seek(0)
                 frame_bgr = cv2.imdecode(np.frombuffer(archivo.read(), np.uint8), cv2.IMREAD_COLOR)
                 if rotacion_seleccionada is not None: frame_bgr = cv2.rotate(frame_bgr, rotacion_seleccionada)
                 
