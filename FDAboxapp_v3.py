@@ -57,23 +57,75 @@ if archivos_subidos:
     num_img = len(archivos_ordenados)
     
     st.sidebar.markdown("---")
-    freq_roi = st.sidebar.slider("Frec. re-cálculo ROI (cada N fotos):", 1, num_img, 1)
+    freq_roi = st.sidebar.slider("Frec. re-cálculo ROI (cada N fotos):", 1, num_img, max(1, num_img // 2))
     w_sg_cin = st.sidebar.slider(f"Ventana Temporal (5 a {num_img}):", min_value=5, max_value=max(5, num_img), value=min(31, max(5, num_img)), step=2)
     poly_sg_cin = st.sidebar.slider("Polinomio Derivada:", 1, 5, 2)
 
     # =========================================================================
-    # 2. SEGMENTACIÓN DE ROIS Y DIAGNÓSTICO
+    # 2. CALIBRACIÓN DE PLANTILLA MAESTRA Y Detección Espacial
     # =========================================================================
     st.markdown("---")
     st.subheader("🎞️ Diagnóstico Visual (Cinta Horizontal de Referencias)")
     
     ref_indices = list(range(0, num_img, freq_roi))
     st.session_state.rois_por_ref = {}
-    
-    # Variables dinámicas para mantener la memoria del "mejor estado" encontrado
-    last_good_x = []
-    mejor_w, mejor_h = 30, 20
-    
+
+    # --- PASE DE CALIBRACIÓN GEOMÉTRICA GLOBAL (De fotos tardías a iniciales) ---
+    master_centros_x = None
+    master_w_roi = 30
+    master_h_roi = 20
+
+    for i_cand in reversed(ref_indices):
+        archivo_cand = archivos_ordenados[i_cand]
+        archivo_cand.seek(0)
+        img_bgr_cand = cv2.imdecode(np.frombuffer(archivo_cand.read(), np.uint8), cv2.IMREAD_COLOR)
+        if rotacion_seleccionada is not None:
+            img_bgr_cand = cv2.rotate(img_bgr_cand, rotacion_seleccionada)
+        
+        c_azul_c = img_bgr_cand[:, :, 0]
+        p_y_c = np.mean(c_azul_c, axis=1)
+        d_y_c = savgol_filter(p_y_c, window_length=w_sg_y, polyorder=poly_sg, deriv=1)
+        y_min_c = int(np.argmax(d_y_c))
+        y_max_c = int(np.argmin(d_y_c[y_min_c:]) + y_min_c)
+        alto_banda_c = max(10, y_max_c - y_min_c)
+        
+        franja_c = c_azul_c[y_min_c:y_max_c, :]
+        p_x_c = np.mean(franja_c, axis=0)
+        d_x_c = savgol_filter(p_x_c, window_length=w_sg_x, polyorder=poly_sg, deriv=1)
+        umbral_x_c = np.max(np.abs(d_x_c)) * sensibilidad_x
+        
+        b_izq_c, _ = find_peaks(d_x_c, height=umbral_x_c, distance=max(15, st.session_state.ancho_px // 90))
+        b_der_c, _ = find_peaks(-d_x_c, height=umbral_x_c, distance=max(15, st.session_state.ancho_px // 90))
+        
+        cands_x = []
+        for bi in b_izq_c:
+            bd_cands = b_der_c[b_der_c > bi]
+            if len(bd_cands) > 0:
+                bd = bd_cands[0]
+                if int(st.session_state.ancho_px * 0.008) < (bd - bi) < int(st.session_state.ancho_px * 0.15):
+                    cands_x.append((bi, bd, (bi + bd) // 2))
+        cands_x.sort(key=lambda x: x[0])
+        
+        if len(cands_x) == n_rois_esperado:
+            master_centros_x = [c[2] for c in cands_x]
+            ancho_min = min([b[1] - b[0] for b in cands_x])
+            red_px = int(ancho_min * factor_reduccion * 2)
+            master_w_roi = max(5, ancho_min - red_px)
+            master_h_roi = max(5, alto_banda_c - red_px)
+            break
+
+    # Si ninguna foto individual logró detectar N ROIs exactos, crear plantilla predeterminada basada en distribución relativa uniforme
+    if master_centros_x is None:
+        espaciado = st.session_state.ancho_px // (n_rois_esperado + 1)
+        master_centros_x = [espaciado * (j + 1) for j in range(n_rois_esperado)]
+        master_w_roi = 30
+        master_h_roi = 20
+
+    # FIJAR ÁREA DEL ROI ÁREA GLOBAL E INMUTABLE
+    st.session_state.w_roi_fijo = master_w_roi
+    st.session_state.h_roi_fijo = master_h_roi
+
+    # --- PROCESAMIENTO DE LAS FOTOS DE REFERENCIA (CINTA HORIZONTAL) ---
     columnas_img = st.columns(len(ref_indices) if len(ref_indices) > 0 else 1)
     
     for idx_panel, i in enumerate(ref_indices):
@@ -89,15 +141,14 @@ if archivos_subidos:
             st.session_state.alto_px, st.session_state.ancho_px = img_bgr.shape[:2]
             canal_azul = img_bgr[:, :, 0]
             
-            # 1. Detección Y (Banda horizontal)
+            # Detección Y (Banda horizontal de los tubos)
             perfil_y = np.mean(canal_azul, axis=1)
             derivada_y = savgol_filter(perfil_y, window_length=w_sg_y, polyorder=poly_sg, deriv=1)
             y_min = int(np.argmax(derivada_y))
             y_max = int(np.argmin(derivada_y[y_min:]) + y_min)
             y_central = (y_min + y_max) // 2
-            alto_banda = max(10, y_max - y_min)
 
-            # 2. Detección X
+            # Detección X local
             franja_azul = canal_azul[y_min:y_max, :]
             perfil_x = np.mean(franja_azul, axis=0)
             derivada_x = savgol_filter(perfil_x, window_length=w_sg_x, polyorder=poly_sg, deriv=1)
@@ -116,46 +167,39 @@ if archivos_subidos:
             
             lista_centros_x.sort(key=lambda x: x[0])
             
-            # LÓGICA DE ROBUSTECIMIENTO (Equidistancia + Tracking)
             centros_finales_x = []
             if len(lista_centros_x) == n_rois_esperado:
-                # Detección perfecta: Guardamos como estándar y calculamos anchos de caja
-                last_good_x = [c[2] for c in lista_centros_x]
-                ancho_min = min([b[1] - b[0] for b in lista_centros_x])
-                red_px = int(ancho_min * factor_reduccion * 2)
-                mejor_w = max(5, ancho_min - red_px)
-                mejor_h = max(5, alto_banda - red_px)
-                centros_finales_x = last_good_x
+                # Si la foto actual es clara y detecta los N ROIs, usa sus centros locales
+                centros_finales_x = [c[2] for c in lista_centros_x]
+                estado_txt = "Detección Directa"
+            elif len(lista_centros_x) > 0 and len(lista_centros_x) < n_rois_esperado:
+                # Si detecta algunos picos, calcula el desplazamiento (shift) respecto a la Plantilla Maestra
+                picos_locales = [c[2] for c in lista_centros_x]
+                # Buscar el mejor offset alineando el primer pico encontrado
+                offset = picos_locales[0] - master_centros_x[0]
+                centros_finales_x = [cx + offset for cx in master_centros_x]
+                estado_txt = f"Alineación Relativa ({len(lista_centros_x)}/8 picos)"
             else:
-                # Detección fallida (probablemente imagen oscura)
-                if len(last_good_x) == n_rois_esperado:
-                    # Usamos la última foto que se vio bien (Tracking)
-                    centros_finales_x = last_good_x
-                else:
-                    # Plan B: Si ninguna foto funcionó aún (Foto 0 muy oscura), usamos Equidistancia
-                    espaciado = st.session_state.ancho_px // (n_rois_esperado + 1)
-                    centros_finales_x = [espaciado * (j + 1) for j in range(n_rois_esperado)]
+                # Foto oscura (ej. Ref 0): proyecta exactamente la Plantilla Geométrico-Relativa
+                centros_finales_x = master_centros_x
+                estado_txt = "Proyección Maestra"
             
-            # Guardamos las coordenadas para esta referencia
             st.session_state.rois_por_ref[i] = (centros_finales_x, y_central)
 
-            # Dibujamos en pantalla para diagnóstico
+            # Dibujar rectángulos en el diagnóstico visual (CON ÁREA DE ROI FIJA GLOBAL)
             img_disp = img_bgr.copy()
             cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
             cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
             
+            w_fixed = st.session_state.w_roi_fijo
+            h_fixed = st.session_state.h_roi_fijo
             for cx in centros_finales_x:
-                cv2.rectangle(img_disp, (cx - mejor_w // 2, y_central - mejor_h // 2),
-                              (cx + mejor_w // 2, y_central + mejor_h // 2), (0, 255, 0), 2)
+                cv2.rectangle(img_disp, (cx - w_fixed // 2, y_central - h_fixed // 2),
+                              (cx + w_fixed // 2, y_central + h_fixed // 2), (0, 255, 0), 2)
             
-            # Feedback visual de la estrategia usada
-            estado_txt = "Perfecto" if len(lista_centros_x) == n_rois_esperado else ("Tracking" if len(last_good_x) > 0 else "Equidistancia")
             st.image(cv2.cvtColor(img_disp, cv2.COLOR_BGR2RGB), caption=f"Ref {i} | {estado_txt}", use_container_width=True)
 
             del img_bgr, canal_azul, franja_azul, img_disp; gc.collect()
-            
-    st.session_state.w_roi_fijo = mejor_w
-    st.session_state.h_roi_fijo = mejor_h
 
     # =========================================================================
     # 3. METADATOS (NOMBRES, MASAS Y COLORES)
@@ -191,7 +235,6 @@ if archivos_subidos:
             barra.progress(int((idx + 1) / num_img * 100))
             ref_idx = (idx // freq_roi) * freq_roi
             
-            # Recuperamos el Tracking
             centros_x_act, y_cent_actual = st.session_state.rois_por_ref[ref_idx]
             
             archivo.seek(0)
@@ -203,7 +246,6 @@ if archivos_subidos:
             w_r, h_r = st.session_state.w_roi_fijo, st.session_state.h_roi_fijo
             
             for r_idx, cx in enumerate(centros_x_act):
-                # Boundary Clamping: Evita que el recuadro salga de la foto e inyecte NaNs
                 x1 = max(0, cx - w_r // 2)
                 x2 = min(st.session_state.ancho_px, cx + w_r // 2)
                 y1 = max(0, y_cent_actual - h_r // 2)
@@ -353,7 +395,6 @@ if archivos_subidos:
             [fig_4a, fig_4b, fig_4c]
         ]
         
-        # Uso de código HEX para evitar que se rompa el string multilínea
         html_cabecera = [
             "\x3c!DOCTYPE html\x3e",
             "\x3chtml lang='es'\x3e",
