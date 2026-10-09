@@ -62,7 +62,7 @@ if archivos_subidos:
     poly_sg_cin = st.sidebar.slider("Polinomio Derivada:", 1, 5, 2)
 
     # =========================================================================
-    # 2. CALIBRACIÓN DE PLANTILLA MAESTRA Y Detección Espacial
+    # 2. CALIBRACIÓN DE PLANTILLA MAESTRA Y DETECCIÓN ESPACIAL
     # =========================================================================
     st.markdown("---")
     st.subheader("🎞️ Diagnóstico Visual (Cinta Horizontal de Referencias)")
@@ -114,7 +114,7 @@ if archivos_subidos:
             master_h_roi = max(5, alto_banda_c - red_px)
             break
 
-    # Si ninguna foto individual logró detectar N ROIs exactos, crear plantilla predeterminada basada en distribución relativa uniforme
+    # Fallback si ninguna foto de referencia tuvo los 8 picos directos
     if master_centros_x is None:
         espaciado = st.session_state.ancho_px // (n_rois_esperado + 1)
         master_centros_x = [espaciado * (j + 1) for j in range(n_rois_esperado)]
@@ -125,7 +125,7 @@ if archivos_subidos:
     st.session_state.w_roi_fijo = master_w_roi
     st.session_state.h_roi_fijo = master_h_roi
 
-    # --- PROCESAMIENTO DE LAS FOTOS DE REFERENCIA (CINTA HORIZONTAL) ---
+    # --- PROCESAMIENTO Y ALINEACIÓN POR CONSENSO DE CADA FOTO DE REFERENCIA ---
     columnas_img = st.columns(len(ref_indices) if len(ref_indices) > 0 else 1)
     
     for idx_panel, i in enumerate(ref_indices):
@@ -167,26 +167,40 @@ if archivos_subidos:
             
             lista_centros_x.sort(key=lambda x: x[0])
             
+            # --- ALINEACIÓN POR CONSENSO CON LA PLANTILLA MAESTRA ---
             centros_finales_x = []
             if len(lista_centros_x) == n_rois_esperado:
-                # Si la foto actual es clara y detecta los N ROIs, usa sus centros locales
                 centros_finales_x = [c[2] for c in lista_centros_x]
-                estado_txt = "Detección Directa"
-            elif len(lista_centros_x) > 0 and len(lista_centros_x) < n_rois_esperado:
-                # Si detecta algunos picos, calcula el desplazamiento (shift) respecto a la Plantilla Maestra
-                picos_locales = [c[2] for c in lista_centros_x]
-                # Buscar el mejor offset alineando el primer pico encontrado
-                offset = picos_locales[0] - master_centros_x[0]
-                centros_finales_x = [cx + offset for cx in master_centros_x]
-                estado_txt = f"Alineación Relativa ({len(lista_centros_x)}/8 picos)"
+                estado_txt = "Detección Directa (8/8)"
             else:
-                # Foto oscura (ej. Ref 0): proyecta exactamente la Plantilla Geométrico-Relativa
-                centros_finales_x = master_centros_x
-                estado_txt = "Proyección Maestra"
+                picos_locales = [c[2] for c in lista_centros_x]
+                if len(picos_locales) > 0 and master_centros_x is not None:
+                    diffs_master = np.diff(master_centros_x)
+                    spacing = np.median(diffs_master) if len(diffs_master) > 0 else (st.session_state.ancho_px // (n_rois_esperado + 1))
+                    max_drift = spacing / 2.0
+                    
+                    offsets = []
+                    for p in picos_locales:
+                        distancias = [abs(p - m) for m in master_centros_x]
+                        idx_min = int(np.argmin(distancias))
+                        if distancias[idx_min] < max_drift:
+                            offsets.append(p - master_centros_x[idx_min])
+                    
+                    if len(offsets) > 0:
+                        shift_global = int(np.median(offsets))
+                        estado_txt = f"Alineación Relativa ({len(offsets)}/8 picos, Shift: {shift_global:+d}px)"
+                    else:
+                        shift_global = 0
+                        estado_txt = "Proyección Maestra (Sin coincide.)"
+                    
+                    centros_finales_x = [int(cx + shift_global) for cx in master_centros_x]
+                else:
+                    centros_finales_x = master_centros_x
+                    estado_txt = "Proyección Maestra (0 picos)"
             
             st.session_state.rois_por_ref[i] = (centros_finales_x, y_central)
 
-            # Dibujar rectángulos en el diagnóstico visual (CON ÁREA DE ROI FIJA GLOBAL)
+            # Dibujar rectángulos en el diagnóstico visual
             img_disp = img_bgr.copy()
             cv2.line(img_disp, (0, y_min), (st.session_state.ancho_px, y_min), (255, 0, 0), 2)
             cv2.line(img_disp, (0, y_max), (st.session_state.ancho_px, y_max), (255, 0, 0), 2)
